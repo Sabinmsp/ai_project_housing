@@ -1,0 +1,5 @@
+pydantic>=2.5
+hypothesis>=6.90
+pytest>=8.0
+# optional, for the real LLM extractor
+openai>=1.40
