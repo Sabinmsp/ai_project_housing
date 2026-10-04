@@ -28,6 +28,8 @@ class RankedJob(BaseModel):
     job_id: UUID
     # Invariant 7: each entry is a reason string, never a bare marker.
     flags: tuple[str, ...] = ()
+    # description is schema metadata only; Pydantic doesn't enforce it.
+    decided_by: str = Field(min_length=1, description="coordinator-only; tenant renderers must never emit")
 
 
 class RankResult(BaseModel):

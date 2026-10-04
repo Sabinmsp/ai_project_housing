@@ -4,7 +4,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from triage.models import RankInput
-from triage.ranking import NO_TIER_FLAG, rank, sort_key
+from triage.ranking import NO_TIER_FLAG, SLOT_REASONS, rank, sort_key
 
 NOW = datetime(2026, 10, 4, 9, 0, tzinfo=timezone.utc)
 
@@ -149,3 +149,38 @@ def test_all_untiered_non_safety_jobs_go_to_review_band() -> None:
     result = rank([newest, oldest, middle])
     assert result.ranked == ()
     assert result.review_band == (oldest.job_id, middle.job_id, newest.job_id)
+
+
+def decided_by(jobs: list[RankInput]) -> list[str]:
+    return [entry.decided_by for entry in rank(jobs).ranked]
+
+
+def test_decided_by_top_of_list() -> None:
+    assert decided_by([job(1, 3)]) == ["top of list"]
+
+
+def test_decided_by_safety() -> None:
+    assert decided_by([job(1, 4), job(2, 2)])[1] == "below #1: higher safety level above"
+
+
+def test_decided_by_tally_missing() -> None:
+    assert decided_by([job(2, 4), job(2, None)])[1] == (
+        "below #1: untiered safety job above, needs a human tier call first"
+    )
+
+
+def test_decided_by_tally() -> None:
+    assert decided_by([job(1, 2), job(1, 4)])[1] == "below #1: higher urgency score above"
+
+
+def test_decided_by_timestamp() -> None:
+    assert decided_by([job(1, 3), job(1, 3, MON)])[1] == "tied on safety and urgency; earlier report wins"
+
+
+def test_decided_by_job_id() -> None:
+    jobs = [job(1, 3, job_id=UUID(int=2)), job(1, 3, job_id=UUID(int=1))]
+    assert decided_by(jobs)[1] == "identical; order arbitrary but fixed"
+
+
+def test_one_decided_by_reason_per_sort_key_slot() -> None:
+    assert len(SLOT_REASONS) == len(sort_key(job(1, 3)))

@@ -4,6 +4,15 @@ from uuid import UUID
 from triage.models import RankedJob, RankInput, RankResult
 
 NO_TIER_FLAG = "No tier: fault isn't on the reference list — needs a tier call"
+REVIEW_BAND_REASON = "not on the reference list, no safety trigger — awaiting a tier call"
+# Index i explains slot i of sort_key; a test pins the two lengths together.
+SLOT_REASONS = (
+    "below #{above}: higher safety level above",
+    "below #{above}: untiered safety job above, needs a human tier call first",
+    "below #{above}: higher urgency score above",
+    "tied on safety and urgency; earlier report wins",
+    "identical; order arbitrary but fixed",
+)
 
 
 def _in_review_band(job: RankInput) -> bool:
@@ -36,14 +45,24 @@ def rank(jobs: list[RankInput]) -> RankResult:
     # sorted() returns a new list, so the caller's list is never reordered.
     band_sorted = sorted(band, key=lambda job: (job.original_timestamp, job.job_id))
 
+    ordered = sorted(rest, key=sort_key)
     ranked = tuple(
         RankedJob(
             position=position,
             job_id=job.job_id,
             # Invariant 6: a safety job without a tier is ranked, but flagged for a tier call.
             flags=(NO_TIER_FLAG,) if job.tally is None else (),
+            decided_by=_decided_by(position, ordered[position - 2] if position > 1 else None, job),
         )
         # enumerate(..., start=1) yields 1-based positions.
-        for position, job in enumerate(sorted(rest, key=sort_key), start=1)
+        for position, job in enumerate(ordered, start=1)
     )
     return RankResult(review_band=tuple(job.job_id for job in band_sorted), ranked=ranked)
+
+
+def _decided_by(position: int, above: RankInput | None, job: RankInput) -> str:
+    if above is None:
+        return "top of list"
+    # job_ids are unique, so some slot always differs.
+    slot = next(i for i, (a, b) in enumerate(zip(sort_key(above), sort_key(job))) if a != b)
+    return SLOT_REASONS[slot].format(above=position - 1)

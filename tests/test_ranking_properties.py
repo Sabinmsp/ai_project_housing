@@ -72,3 +72,11 @@ def test_p5_band_exactly_when_untiered_and_no_safety(jobs: list[RankInput]) -> N
         in_band = job.tally is None and job.safety_level == 0
         assert (job.job_id in band) == in_band
         assert (job.job_id in ranked) == (not in_band)
+
+
+@given(jobs_strategy)
+def test_decided_by_present_and_top_of_list_first(jobs: list[RankInput]) -> None:
+    ranked = rank(jobs).ranked
+    assert all(entry.decided_by for entry in ranked)
+    if ranked:
+        assert ranked[0].decided_by == "top of list"
