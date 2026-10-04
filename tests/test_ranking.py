@@ -88,3 +88,64 @@ def test_empty_input_returns_empty_result() -> None:
     result = rank([])
     assert result.review_band == ()
     assert result.ranked == ()
+
+
+MON = datetime(2026, 9, 28, 9, 0, tzinfo=timezone.utc)
+TUE, WED, THU = (MON + timedelta(days=n) for n in (1, 2, 3))
+
+
+def test_realistic_queue() -> None:
+    gas = job(2, 4, WED)
+    roof = job(2, None, THU)
+    wire = job(1, 4, MON)
+    toilet_a = job(0, 4, MON)
+    toilet_b = job(0, 4, TUE)
+    stove = job(0, 3, MON)
+    brown_water = job(0, None, MON)
+
+    result = rank([stove, toilet_b, brown_water, gas, toilet_a, roof, wire])
+
+    expected = [roof, gas, wire, toilet_a, toilet_b, stove]
+    assert [entry.job_id for entry in result.ranked] == [j.job_id for j in expected]
+    assert result.review_band == (brown_water.job_id,)
+    flagged = [entry.job_id for entry in result.ranked if NO_TIER_FLAG in entry.flags]
+    assert flagged == [roof.job_id]
+
+
+def test_escalated_job_keeps_its_place_by_original_timestamp() -> None:
+    # This proves rank() honours the preserved original_timestamp; it does not prove
+    # escalation preserves it (invariant 4), because model_copy here sets that up by hand.
+    # model_copy(update=...) skips validation, so the update must already be valid.
+    reported_monday = job(1, 2, MON)
+    escalated = reported_monday.model_copy(update={"tally": 3})
+    reported_tuesday = job(1, 3, TUE)
+
+    result = rank([reported_tuesday, escalated])
+
+    assert escalated.original_timestamp == MON
+    assert [entry.job_id for entry in result.ranked] == [escalated.job_id, reported_tuesday.job_id]
+
+
+def test_conditional_low_tally_above_no_safety_high_tally() -> None:
+    conditional = job(1, 2)
+    no_safety = job(0, 4)
+    result = rank([no_safety, conditional])
+    assert [entry.job_id for entry in result.ranked] == [conditional.job_id, no_safety.job_id]
+
+
+def test_untiered_conditional_job_first_in_its_level() -> None:
+    gas = job(2, 2)
+    ac_sparking = job(1, None)
+    wire = job(1, 4)
+    result = rank([wire, ac_sparking, gas])
+    assert [entry.job_id for entry in result.ranked] == [gas.job_id, ac_sparking.job_id, wire.job_id]
+    assert result.ranked[1].flags == (NO_TIER_FLAG,)
+
+
+def test_all_untiered_non_safety_jobs_go_to_review_band() -> None:
+    newest = job(0, None)
+    oldest = job(0, None, NOW - timedelta(days=2))
+    middle = job(0, None, NOW - timedelta(days=1))
+    result = rank([newest, oldest, middle])
+    assert result.ranked == ()
+    assert result.review_band == (oldest.job_id, middle.job_id, newest.job_id)
