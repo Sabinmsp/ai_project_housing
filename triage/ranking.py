@@ -13,6 +13,8 @@ SLOT_REASONS = (
     "tied on safety and urgency; earlier report wins",
     "identical; order arbitrary but fixed",
 )
+# Replaces the timestamp-slot reason when neither job has an urgency score to tie on.
+UNTIERED_TIE_REASON = "both untiered at the same safety level; earlier report wins"
 
 
 def _in_review_band(job: RankInput) -> bool:
@@ -35,6 +37,10 @@ def sort_key(job: RankInput) -> tuple[int, int, int, datetime, UUID]:
 
 
 def rank(jobs: list[RankInput]) -> RankResult:
+    # model_copy(update=...) skips validation, so re-check every job. vars() is used, not
+    # model_dump(), because model_dump() silently drops unknown fields such as "override".
+    # Pydantic's ValidationError is a ValueError subclass.
+    jobs = [RankInput.model_validate(vars(job)) for job in jobs]
     ids = [job.job_id for job in jobs]
     duplicates = sorted({job_id for job_id in ids if ids.count(job_id) > 1})
     if duplicates:
@@ -65,4 +71,7 @@ def _decided_by(position: int, above: RankInput | None, job: RankInput) -> str:
         return "top of list"
     # job_ids are unique, so some slot always differs.
     slot = next(i for i, (a, b) in enumerate(zip(sort_key(above), sort_key(job))) if a != b)
+    # Slot 3 is the timestamp; reaching it with tally None means both jobs are untiered.
+    if slot == 3 and job.tally is None:
+        return UNTIERED_TIE_REASON
     return SLOT_REASONS[slot].format(above=position - 1)

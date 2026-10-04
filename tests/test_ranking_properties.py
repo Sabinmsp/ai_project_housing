@@ -16,7 +16,7 @@ jobs_strategy = st.lists(
     # st.builds calls RankInput(...) with a value drawn from each strategy.
     st.builds(
         RankInput,
-        job_id=st.uuids(),
+        job_id=st.uuids(version=4),
         safety_level=st.integers(min_value=0, max_value=2),
         tally=st.none() | st.integers(min_value=2, max_value=4),
         original_timestamp=st.datetimes(EARLIEST, LATEST, timezones=st.just(timezone.utc)),
@@ -46,6 +46,14 @@ def test_p2_equal_safety_and_tally_older_first(jobs: list[RankInput]) -> None:
         for below in ordered[i + 1 :]:
             if (above.safety_level, above.tally) == (below.safety_level, below.tally):
                 assert above.original_timestamp <= below.original_timestamp
+
+
+@given(jobs_strategy)
+def test_p6_same_safety_tiered_jobs_non_increasing_tally(jobs: list[RankInput]) -> None:
+    ordered = ranked_jobs(jobs, rank(jobs))
+    for level in (0, 1, 2):
+        tallies = [job.tally for job in ordered if job.safety_level == level and job.tally is not None]
+        assert tallies == sorted(tallies, reverse=True)
 
 
 # st.data() lets the test draw further values mid-test, sized to the list it already has.

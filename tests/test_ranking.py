@@ -4,7 +4,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from triage.models import RankInput
-from triage.ranking import NO_TIER_FLAG, SLOT_REASONS, rank, sort_key
+from triage.ranking import NO_TIER_FLAG, SLOT_REASONS, UNTIERED_TIE_REASON, rank, sort_key
 
 NOW = datetime(2026, 10, 4, 9, 0, tzinfo=timezone.utc)
 
@@ -37,8 +37,9 @@ def test_older_first_when_safety_and_tally_equal() -> None:
 
 
 def test_job_id_breaks_full_tie_deterministically() -> None:
-    low = job(1, 3, job_id=UUID(int=1))
-    high = job(1, 3, job_id=UUID(int=2))
+    low_id, high_id = sorted([uuid4(), uuid4()])
+    low = job(1, 3, job_id=low_id)
+    high = job(1, 3, job_id=high_id)
     forward = sorted([high, low], key=sort_key)
     assert forward == [low, high]
     assert sorted([low, high], key=sort_key) == forward
@@ -110,6 +111,14 @@ def test_realistic_queue() -> None:
     assert result.review_band == (brown_water.job_id,)
     flagged = [entry.job_id for entry in result.ranked if NO_TIER_FLAG in entry.flags]
     assert flagged == [roof.job_id]
+    assert [entry.decided_by for entry in result.ranked] == [
+        "top of list",
+        "below #1: untiered safety job above, needs a human tier call first",
+        "below #2: higher safety level above",
+        "below #3: higher safety level above",
+        "tied on safety and urgency; earlier report wins",
+        "below #5: higher urgency score above",
+    ]
 
 
 def test_escalated_job_keeps_its_place_by_original_timestamp() -> None:
@@ -170,7 +179,11 @@ def test_decided_by_tally_missing() -> None:
 
 
 def test_decided_by_tally() -> None:
-    assert decided_by([job(1, 2), job(1, 4)])[1] == "below #1: higher urgency score above"
+    low = job(1, 2)
+    high = job(1, 4)
+    result = rank([low, high])
+    assert [entry.job_id for entry in result.ranked] == [high.job_id, low.job_id]
+    assert result.ranked[1].decided_by == "below #1: higher urgency score above"
 
 
 def test_decided_by_timestamp() -> None:
@@ -178,9 +191,29 @@ def test_decided_by_timestamp() -> None:
 
 
 def test_decided_by_job_id() -> None:
-    jobs = [job(1, 3, job_id=UUID(int=2)), job(1, 3, job_id=UUID(int=1))]
+    low_id, high_id = sorted([uuid4(), uuid4()])
+    jobs = [job(1, 3, job_id=high_id), job(1, 3, job_id=low_id)]
     assert decided_by(jobs)[1] == "identical; order arbitrary but fixed"
+
+
+def test_decided_by_untiered_tie() -> None:
+    assert decided_by([job(1, None), job(1, None, MON)])[1] == UNTIERED_TIE_REASON
+
+
+def test_decided_by_untiered_same_timestamp_falls_to_job_id() -> None:
+    assert decided_by([job(1, None), job(1, None)])[1] == "identical; order arbitrary but fixed"
+
+
+def test_decided_by_untiered_different_safety() -> None:
+    assert decided_by([job(1, None), job(2, None)])[1] == "below #1: higher safety level above"
 
 
 def test_one_decided_by_reason_per_sort_key_slot() -> None:
     assert len(SLOT_REASONS) == len(sort_key(job(1, 3)))
+
+
+@pytest.mark.parametrize("update", [{"safety_level": 7}, {"override": True}])
+def test_rank_revalidates_model_copy_input(update: dict[str, object]) -> None:
+    bad = job(1, 3).model_copy(update=update)
+    with pytest.raises(ValueError):
+        rank([job(2, 4), bad])
