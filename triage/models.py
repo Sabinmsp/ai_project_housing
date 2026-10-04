@@ -19,3 +19,20 @@ class RankInput(BaseModel):
     # Logistics G1: carried for display; rank() must never read it.
     # allow_inf_nan=False: ge=0 alone lets inf through.
     distance_km: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+
+
+class RankedJob(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    position: int = Field(ge=1)
+    job_id: UUID
+    # Invariant 7: each entry is a reason string, never a bare marker.
+    flags: tuple[str, ...] = ()
+
+
+class RankResult(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    # No tier and no safety trigger: awaits a tier call instead of being ranked.
+    review_band: tuple[UUID, ...]
+    ranked: tuple[RankedJob, ...]
