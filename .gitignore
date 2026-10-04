@@ -1,0 +1,9 @@
+CLAUDE.md
+docs/
+.venv
+# Python
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.db
