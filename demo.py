@@ -2,17 +2,22 @@
 
 Stages 3 to 5 belong to teammates. The `_standin_*` functions below are
 minimal placeholders so the demo runs; replace them with the real modules
-once they land. Run: python demo.py
+once they land.
+
+Reports are read from the reports/ folder (one .pdf or .txt per report; see
+triage/report_files.py for the layout). Run: python demo.py [folder]
 """
-from datetime import datetime, timedelta, timezone
+import os
+import sys
+from pathlib import Path
 
 from triage.extraction import default_client, extract
-from triage.intake import SQLiteReportRepository, create_report
+from triage.intake import DuplicateRequestError, SQLiteReportRepository
 from triage.models import EnrichedJob, ExtractionStatus, VerifiedSpan
 from triage.ranking import rank, render_coordinator, render_tenant_sms
+from triage.report_files import load_reports
 
-ACST = timezone(timedelta(hours=9, minutes=30))
-NOW = datetime(2026, 9, 30, 15, 0, tzinfo=ACST)
+REPORTS_DIR = Path(__file__).with_name("reports")
 
 # ---- stand-ins for teammates' stages (NOT part of Stages 1, 2, 6) --------
 _STANDIN_TIERS = {
@@ -48,26 +53,39 @@ def _standin_stages_3_to_5(report, facts) -> EnrichedJob:
 # --------------------------------------------------------------------------
 
 
-INTAKE = [
-    ("T-01", "Darwin", "officer", 2, "toilet blocked, using the other one"),
-    ("T-02", "Wadeye", "tenant_direct", 5, "toilet blocked, going down the servo"),
-    ("T-03", "Maningrida", "tenant_direct", 1,
-     "roof leaking in kids room, water coming through the light fitting"),
-    ("T-04", "Galiwinku", "tenant_direct", 3, "no hot water since last week"),
-    ("T-05", "Wadeye", "officer", 4, "the ceiling fan wobbles and makes a noise"),
-    ("T-06", "Darwin", "tenant_direct", 6, "toilet blocked"),
-]
+def _load_dotenv(path: Path = Path(__file__).with_name(".env")) -> None:
+    """Read KEY=value lines from .env (git-ignored). Real env vars win."""
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip())
 
 
 def main() -> None:
+    _load_dotenv()
+    folder = Path(sys.argv[1]) if len(sys.argv) > 1 else REPORTS_DIR
+    if not folder.is_dir():
+        sys.exit(f"Report folder not found: {folder}")
     repo = SQLiteReportRepository()
     client = default_client()
-    print(f"extractor: {client.name}\n")
+    print(f"extractor: {client.name}")
 
-    for tenant, community, source, days_ago, text in INTAKE:
-        repo.save(create_report(tenant_id=tenant, raw_text=text, source_tag=source,
-                                community=community,
-                                original_report_timestamp=NOW - timedelta(days=days_ago)))
+    reports, skipped = load_reports(folder)
+    print(f"reports: {len(reports)} read from {folder}/")
+    for path, why in skipped:
+        print(f"  skipped {path.name}: {why}")
+    for report in reports:
+        try:
+            repo.save(report)
+        except DuplicateRequestError:
+            print(f"  skipped duplicate request_id {report.request_id}")
+    if not reports:
+        print("Nothing to rank. Add .pdf or .txt reports to the folder.")
+        return
+    print()
 
     jobs = []
     for report in repo.all():
