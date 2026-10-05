@@ -23,7 +23,11 @@ class SourceTag(str, Enum):
 
 
 class Report(BaseModel):
-    """Raw report plus exactly four stamped fields. No interpretation."""
+    """Raw report plus the stamped intake fields. No interpretation.
+
+    The last four fields record where the report came from (provenance). They
+    are never sent to the model and never read by ranking.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -33,6 +37,11 @@ class Report(BaseModel):
     source_tag: SourceTag
     community: str = Field(min_length=1)  # needed by Stage 5 distance lookup
     original_report_timestamp: datetime
+
+    region: Optional[str] = None
+    source_file: Optional[str] = None
+    source_item: Optional[int] = None  # item # within a multi-issue form
+    timestamp_source: Optional[str] = None  # how original_report_timestamp was set
 
     @field_validator("original_report_timestamp")
     @classmethod
@@ -87,6 +96,10 @@ class ExtractedFacts(BaseModel):
         required: list[str] = []
         if self.fault_description:
             required.append("fault_description")
+        if self.taxonomy_match:
+            required.append("taxonomy_match")
+        if self.impact_status == "intermittent":
+            required.append("impact_status")
         if self.alternative_mentioned:
             required.append("alternative_mentioned")
         if self.coping_mentioned:
@@ -138,6 +151,9 @@ class EnrichedJob(BaseModel):
     community: str
     original_report_timestamp: datetime
     fault_description: Optional[str] = None
+    # Fault-list names matched in Stage 2, for the why-trace. Optional so
+    # Stage 5 output without it still validates; never read by the sort.
+    taxonomy_match: list[str] = Field(default_factory=list)
 
     # Stage 4 evaluation. urgency_tally None means REVIEW BAND.
     tier: Optional[Literal["dangerous", "standard"]] = None
@@ -182,16 +198,19 @@ class ReasoningTrace(BaseModel):
 
     request_id: str
     fault_description: Optional[str]
+    taxonomy_match: list[str]
     tier: Literal["dangerous", "standard"]
     tier_source: str
     base_points: int
     no_redundancy: int
     no_redundancy_reason: str
+    defaults_applied: list[str]
     urgency_tally: int
     safety_flag: bool
     safety_reason: str
     evidence_spans: list[VerifiedSpan]
     flags: list[str]
+    original_report_timestamp: datetime
     sort_key: tuple[bool, int, int]
     position: int
     queue_length: int

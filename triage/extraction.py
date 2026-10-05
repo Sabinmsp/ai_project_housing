@@ -46,7 +46,9 @@ You do not judge how serious anything is.
 
 Rules:
 1. Only report what the text says. Every fact you claim must include a quoted \
-span copied EXACTLY, character for character, from the report text.
+span copied EXACTLY, character for character, from the report text. Each \
+span's field names the fact it supports. That includes taxonomy_match (cite the \
+words that describe the fault) and impact_status when it is "intermittent".
 2. taxonomy_match: pick names from the fault list that the report describes. \
 Returning an empty list is correct and expected when nothing on the list fits. \
 List several only if the text genuinely fits several.
@@ -58,7 +60,11 @@ Coping is NOT an alternative.
 5. impact_status: "intermittent" only if the text says the fault comes and \
 goes; otherwise "ongoing".
 6. hazard_mechanism: a described physical pathway to harm, in the tenant's \
-words, or null. mechanism_type: "active" if the harm pathway is happening now \
+words, or null. It must say HOW a person could be hurt (e.g. water reaching \
+electrics, sparking, a gas smell, exposed wires, a ceiling about to fall). A \
+fault or damage on its own (a leak, something not heating, mould, a stain) is \
+not a hazard_mechanism unless the text also says how it could hurt someone. \
+mechanism_type: "active" if the harm pathway is happening now \
 (e.g. water coming through a light fitting), "conditional" if it could happen \
 under some condition (e.g. "if it rains"). null if no hazard_mechanism.
 7. If the report names no fault at all, return fault_description null and an \
@@ -79,6 +85,12 @@ class LLMClient(Protocol):
         ...
 
 
+# One report's facts and quotes fit comfortably in this. Without a cap the
+# provider reserves the model's maximum (65k tokens) against the account
+# balance for every call.
+MAX_OUTPUT_TOKENS = 1024
+
+
 class OpenAICompatibleClient:
     """Any OpenAI-compatible endpoint that supports json_schema response format."""
 
@@ -97,14 +109,46 @@ class OpenAICompatibleClient:
         resp = self._client.chat.completions.create(
             model=self.model,
             temperature=0,
+            max_tokens=MAX_OUTPUT_TOKENS,
             messages=[{"role": "system", "content": system},
                       {"role": "user", "content": user}],
             response_format={
                 "type": "json_schema",
-                "json_schema": {"name": "ExtractedFacts", "schema": schema},
+                "json_schema": {"name": "ExtractedFacts", "strict": True, "schema": schema},
             },
         )
         return resp.choices[0].message.content or ""
+
+
+# Keywords strict mode does not accept, plus "description": Pydantic fills it
+# from docstrings written for developers
+# (which mention scores), and the model must never see scoring language.
+_DROP_FROM_SCHEMA = ("default", "minLength", "maxLength", "description")
+
+
+def response_schema() -> dict:
+    """ExtractedFacts as a strict structured-output schema.
+
+    Strict mode makes the provider constrain decoding to the schema instead of
+    treating it as a hint. It requires every property to be listed as required
+    (optional ones are nullable instead) and no extra properties. Pydantic
+    still validates the result, including the rules strict mode cannot express.
+    """
+    def tighten(node):
+        if isinstance(node, dict):
+            for key in _DROP_FROM_SCHEMA:
+                node.pop(key, None)
+            if node.get("type") == "object" and "properties" in node:
+                node["required"] = list(node["properties"])
+                node["additionalProperties"] = False
+            for value in node.values():
+                tighten(value)
+        elif isinstance(node, list):
+            for value in node:
+                tighten(value)
+        return node
+
+    return tighten(ExtractedFacts.model_json_schema())
 
 
 def _parse(raw_json: str, fault_names: list[str]) -> ExtractedFacts:
@@ -118,7 +162,7 @@ def _parse(raw_json: str, fault_names: list[str]) -> ExtractedFacts:
 def extract(report: Report, client: LLMClient,
             fault_names: list[str] = FAULT_NAMES) -> ExtractionResult:
     """One model call, validated at the boundary. Retry once, then flag for a human."""
-    schema = ExtractedFacts.model_json_schema()
+    schema = response_schema()
     user = build_user_prompt(report.raw_text, fault_names)
     errors: list[str] = []
 

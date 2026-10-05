@@ -21,6 +21,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from .geh_form import FormParseError, is_geh_form, parse_geh_form
 from .intake import create_report
 from .models import Report, SourceTag
 
@@ -132,6 +133,8 @@ def parse_report_text(text: str) -> Report:
 def load_reports(folder: Path) -> tuple[list[Report], list[tuple[Path, str]]]:
     """Read every .pdf and .txt file in folder, in name order.
 
+    A GEH repair request form (see geh_form.py) yields one Report per issue;
+    any other file is one report in the layout above.
     Returns (reports, skipped). One bad file never stops the others.
     """
     reports: list[Report] = []
@@ -140,8 +143,12 @@ def load_reports(folder: Path) -> tuple[list[Report], list[tuple[Path, str]]]:
         if path.suffix.lower() not in SUPPORTED_SUFFIXES:
             continue
         try:
-            reports.append(parse_report_text(read_text(path)))
-        except ReportFileError as e:
+            text = read_text(path)
+            if is_geh_form(text):
+                reports.extend(parse_geh_form(path))
+            else:
+                reports.append(parse_report_text(text))
+        except (ReportFileError, FormParseError) as e:
             skipped.append((path, str(e)))
         except Exception as e:  # unreadable or corrupt file
             skipped.append((path, f"could not read file: {e.__class__.__name__}: {e}"))

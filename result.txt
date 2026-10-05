@@ -1,0 +1,475 @@
+
+==============================================================================
+STAGE 1 - INTAKE (code)   22 reports from pdf/
+==============================================================================
+
+R-81C473B0  [01_Greater-Darwin_Humpty-Doo_burst-pipe.pdf item 1]
+  tenant_id=T-CBE0A83A  source_tag=tenant_direct  community=Humpty Doo  region=Greater Darwin
+  original_report_timestamp=2026-10-06T07:36:25.827716+09:30  (form received (file time))
+  raw_text: 'Hot water pipe burst behind laundry wall, water flooding laundry and hallway floor | Location: Laundry | Comments: Water turned off at the meter. No water to the house until repaired.'
+
+R-E24376C7  [01_Greater-Darwin_Humpty-Doo_burst-pipe.pdf item 2]
+  tenant_id=T-CBE0A83A  source_tag=tenant_direct  community=Humpty Doo  region=Greater Darwin
+  original_report_timestamp=2026-10-06T07:36:25.827716+09:30  (form received (file time))
+  raw_text: 'Hot water system not heating since the leak started | Location: Outside, rear wall | Comments: Electric storage unit, approx. 250 L'
+
+R-46DF407B  [01_Greater-Darwin_Humpty-Doo_burst-pipe.pdf item 3]
+  tenant_id=T-CBE0A83A  source_tag=tenant_direct  community=Humpty Doo  region=Greater Darwin
+  original_report_timestamp=2026-10-06T07:36:25.827716+09:30  (form received (file time))
+  raw_text: 'Laundry floor vinyl lifting and skirting board swollen from water | Location: Laundry | Comments: Photos attached'
+
+R-CAE33099  [02_Central-Australia_Yuendumu_air-conditioner.pdf item 1]
+  tenant_id=T-54D24A94  source_tag=tenant_direct  community=Yuendumu  region=Central Australia
+  original_report_timestamp=2026-09-28T00:00:00+09:30  (date previously reported to DIPL (Phone call))
+  raw_text: 'Split system air conditioner blowing warm air only, indoor unit dripping water | Location: Main bedroom | Comments: No contractor booked yet. Daytime temps above 38 C, infant in household.'
+
+R-C85F0509  [02_Central-Australia_Yuendumu_air-conditioner.pdf item 2]
+  tenant_id=T-54D24A94  source_tag=tenant_direct  community=Yuendumu  region=Central Australia
+  original_report_timestamp=2026-09-28T00:00:00+09:30  (date previously reported to DIPL (Phone call))
+  raw_text: 'Living room air conditioner trips the circuit breaker after 10 minutes | Location: Living room | Comments: Second unit, so no working cooling in the house'
+
+R-C59849C6  [02_Central-Australia_Yuendumu_air-conditioner.pdf item 3]
+  tenant_id=T-54D24A94  source_tag=tenant_direct  community=Yuendumu  region=Central Australia
+  original_report_timestamp=2026-10-06T07:36:25.862820+09:30  (form received (file time))
+  raw_text: 'Evaporative cooler pads worn and smelling musty | Location: Roof | Comments: Not used while split systems worked'
+
+R-C5693238  [03_Big-Rivers_Ngukurr_break-in-damage.pdf item 1]
+  tenant_id=T-07331C2E  source_tag=tenant_direct  community=Ngukurr  region=Big Rivers
+  original_report_timestamp=2026-10-06T07:36:25.856574+09:30  (form received (file time))
+  raw_text: 'Front door forced open in break-in, lock and door frame split, door will not close or lock | Location: Front entry | Comments: SerPro occurrence no. 26-104977. House cannot be secured.'
+
+R-BF148A7C  [03_Big-Rivers_Ngukurr_break-in-damage.pdf item 2]
+  tenant_id=T-07331C2E  source_tag=tenant_direct  community=Ngukurr  region=Big Rivers
+  original_report_timestamp=2026-10-06T07:36:25.856574+09:30  (form received (file time))
+  raw_text: 'Louvre window glass smashed, 4 blades broken, security mesh bent | Location: Kitchen | Comments: SerPro occurrence no. 26-104977. Temporarily covered with cardboard.'
+
+R-809B6628  [03_Big-Rivers_Ngukurr_break-in-damage.pdf item 3]
+  tenant_id=T-07331C2E  source_tag=tenant_direct  community=Ngukurr  region=Big Rivers
+  original_report_timestamp=2026-08-15T00:00:00+09:30  (date previously reported to DIPL (Email))
+  raw_text: 'Security screen door hinge bent, door drags on the ground | Location: Back door | Comments: Reported earlier, not related to the break-in'
+
+R-92F943AA  [04_Barkly-Remote_Ali-Curung_electrical-fault.pdf item 1]
+  tenant_id=T-298600D6  source_tag=tenant_direct  community=Ali Curung  region=Barkly remote
+  original_report_timestamp=2026-10-06T07:36:25.850696+09:30  (form received (file time))
+  raw_text: 'Power point sparking and scorched, burning smell when kettle is plugged in | Location: Kitchen bench | Comments: Circuit switched off at the switchboard. Not using the kitchen power.'
+
+R-4CD00D91  [04_Barkly-Remote_Ali-Curung_electrical-fault.pdf item 2]
+  tenant_id=T-298600D6  source_tag=tenant_direct  community=Ali Curung  region=Barkly remote
+  original_report_timestamp=2026-09-22T00:00:00+09:30  (date previously reported to DIPL (In person))
+  raw_text: 'Safety switch trips every time the oven is turned on, stove top still works | Location: Kitchen | Comments: Told the visiting housing officer, no job number given'
+
+R-CD5974F4  [04_Barkly-Remote_Ali-Curung_electrical-fault.pdf item 3]
+  tenant_id=T-298600D6  source_tag=tenant_direct  community=Ali Curung  region=Barkly remote
+  original_report_timestamp=2026-10-06T07:36:25.850696+09:30  (form received (file time))
+  raw_text: 'Smoke alarm beeping every minute after battery was replaced | Location: Hallway | Comments: Hard-wired alarm'
+
+R-B8BC2B1A  [04_Barkly-Remote_Ali-Curung_electrical-fault.pdf item 4]
+  tenant_id=T-298600D6  source_tag=tenant_direct  community=Ali Curung  region=Barkly remote
+  original_report_timestamp=2026-10-06T07:36:25.850696+09:30  (form received (file time))
+  raw_text: 'Outside sensor light not working | Location: Carport | Comments: Bulb already replaced, still not working'
+
+R-0F433C65  [05_Top-End_Wurrumiyanga_roof-leak.pdf item 1]
+  tenant_id=T-2351C4B9  source_tag=tenant_direct  community=Wurrumiyanga  region=Top End (previously known as Arafura)
+  original_report_timestamp=2026-09-10T00:00:00+09:30  (date previously reported to DIPL (Email))
+  raw_text: 'Roof leaking during storms, water stain spreading and ceiling sheet sagging | Location: Bedroom 2 | Comments: No reply received. Wet season is starting, damage is getting worse.'
+
+R-DD2DB354  [05_Top-End_Wurrumiyanga_roof-leak.pdf item 2]
+  tenant_id=T-2351C4B9  source_tag=tenant_direct  community=Wurrumiyanga  region=Top End (previously known as Arafura)
+  original_report_timestamp=2026-09-10T00:00:00+09:30  (date previously reported to DIPL (Email))
+  raw_text: 'Gutter rusted through and hanging off the fascia above the bedroom | Location: Outside, east side | Comments: Likely cause of the ceiling leak'
+
+R-865BEAD3  [05_Top-End_Wurrumiyanga_roof-leak.pdf item 3]
+  tenant_id=T-2351C4B9  source_tag=tenant_direct  community=Wurrumiyanga  region=Top End (previously known as Arafura)
+  original_report_timestamp=2026-10-06T07:36:25.841078+09:30  (form received (file time))
+  raw_text: 'Mould growing on the ceiling and upper wall near the leak | Location: Bedroom 2 | Comments: Room not being used. Photos attached.'
+
+R-535C3992  [05_Top-End_Wurrumiyanga_roof-leak.pdf item 4]
+  tenant_id=T-2351C4B9  source_tag=tenant_direct  community=Wurrumiyanga  region=Top End (previously known as Arafura)
+  original_report_timestamp=2026-10-06T07:36:25.841078+09:30  (form received (file time))
+  raw_text: 'Ceiling fan wobbles and makes a grinding noise on all speeds | Location: Living room'
+
+R-DA78A6DF  [report_6_Sabin_fire.pdf item 1]
+  tenant_id=T-8112AE69  source_tag=tenant_direct  community=Darwin City  region=Greater Darwin
+  original_report_timestamp=2026-10-06T00:00:00+09:30  (date previously reported to DIPL (Phone call))
+  raw_text: 'Fire in kitchen started at the wall power point behind the stove. Put out with extinguisher, wiring burnt and exposed | Location: Kitchen | Comments: NT Fire and Rescue attended via 000. Kitchen circuit off at the switchboard.'
+
+R-C89E96E4  [report_6_Sabin_fire.pdf item 2]
+  tenant_id=T-8112AE69  source_tag=tenant_direct  community=Darwin City  region=Greater Darwin
+  original_report_timestamp=2026-10-06T00:00:00+09:30  (date previously reported to DIPL (Phone call))
+  raw_text: 'Hard-wired smoke alarm did not sound during the fire | Location: Hallway | Comments: No working smoke alarm in the unit'
+
+R-66F83794  [report_6_Sabin_fire.pdf item 3]
+  tenant_id=T-8112AE69  source_tag=tenant_direct  community=Darwin City  region=Greater Darwin
+  original_report_timestamp=2026-10-06T00:00:00+09:30  (date previously reported to DIPL (Phone call))
+  raw_text: 'Stove, rangehood and splashback burnt and melted, cannot cook | Location: Kitchen | Comments: Photos attached'
+
+R-21B0A3AE  [report_6_Sabin_fire.pdf item 4]
+  tenant_id=T-8112AE69  source_tag=tenant_direct  community=Darwin City  region=Greater Darwin
+  original_report_timestamp=2026-10-06T08:25:23.793071+09:30  (form received (file time))
+  raw_text: 'Smoke and soot damage to ceiling, walls and overhead cupboards | Location: Kitchen and living room | Comments: Strong smoke smell through the unit'
+
+R-130893AD  [report_6_Sabin_fire.pdf item 5]
+  tenant_id=T-8112AE69  source_tag=tenant_direct  community=Darwin City  region=Greater Darwin
+  original_report_timestamp=2026-10-06T08:25:23.793071+09:30  (form received (file time))
+  raw_text: 'Fire extinguisher discharged and fire blanket used, both need replacing | Location: Kitchen'
+
+==============================================================================
+STAGE 2 - EXTRACTION (model reads only)   extractor: llm:google/gemini-2.5-flash-lite
+==============================================================================
+
+R-81C473B0  status=ok  attempts=1
+  fault_description: 'Hot water pipe burst behind laundry wall, water flooding laundry and hallway floor'
+  taxonomy_match: ['burst water pipe or serious water leak', 'flooding inside the house']
+  alternative_mentioned=False  coping_mentioned=False  impact_status=ongoing
+  hazard_mechanism: None  mechanism_type=None
+  quote [fault_description]: 'Hot water pipe burst behind laundry wall, water flooding laundry and hallway floor'
+  quote [taxonomy_match]: 'burst water pipe or serious water leak'
+  quote [taxonomy_match]: 'flooding inside the house'
+  quote [impact_status]: 'Water turned off at the meter. No water to the house until repaired.'
+
+R-E24376C7  status=ok  attempts=1
+  fault_description: 'Hot water system not heating since the leak started'
+  taxonomy_match: ['hot water system not working']
+  alternative_mentioned=False  coping_mentioned=False  impact_status=ongoing
+  hazard_mechanism: None  mechanism_type=None
+  quote [fault_description]: 'Hot water system not heating since the leak started'
+  quote [taxonomy_match]: 'Hot water system not working'
+
+R-46DF407B  status=ok  attempts=1
+  fault_description: 'Laundry floor vinyl lifting and skirting board swollen from water'
+  taxonomy_match: ['burst water pipe or serious water leak']
+  alternative_mentioned=False  coping_mentioned=False  impact_status=ongoing
+  hazard_mechanism: None  mechanism_type=None
+  quote [fault_description]: 'Laundry floor vinyl lifting and skirting board swollen from water'
+  quote [taxonomy_match]: 'water'
+
+R-CAE33099  status=ok  attempts=1
+  fault_description: 'Split system air conditioner blowing warm air only, indoor unit dripping water'
+  taxonomy_match: ['air conditioner not working']
+  alternative_mentioned=False  coping_mentioned=False  impact_status=ongoing
+  hazard_mechanism: None  mechanism_type=None
+  quote [fault_description]: 'Split system air conditioner blowing warm air only, indoor unit dripping water'
+  quote [taxonomy_match]: 'air conditioner not working'
+
+R-C85F0509  status=ok  attempts=1
+  fault_description: 'Living room air conditioner trips the circuit breaker after 10 minutes'
+  taxonomy_match: ['air conditioner not working']
+  alternative_mentioned=False  coping_mentioned=False  impact_status=ongoing
+  hazard_mechanism: None  mechanism_type=None
+  quote [fault_description]: 'Living room air conditioner trips the circuit breaker after 10 minutes'
+  quote [taxonomy_match]: 'air conditioner not working'
+
+R-C59849C6  status=ok  attempts=1
+  fault_description: 'Evaporative cooler pads worn and smelling musty'
+  taxonomy_match: []
+  alternative_mentioned=False  coping_mentioned=False  impact_status=ongoing
+  hazard_mechanism: None  mechanism_type=None
+  quote [fault_description]: 'Evaporative cooler pads worn and smelling musty'
+
+R-C5693238  status=ok  attempts=1
+  fault_description: 'Front door forced open in break-in, lock and door frame split, door will not close or lock'
+  taxonomy_match: ['broken external door lock']
+  alternative_mentioned=False  coping_mentioned=False  impact_status=ongoing
+  hazard_mechanism: None  mechanism_type=None
+  quote [fault_description]: 'Front door forced open in break-in, lock and door frame split, door will not close or lock'
+  quote [taxonomy_match]: 'broken external door lock'
+
+R-BF148A7C  status=ok  attempts=1
+  fault_description: 'Louvre window glass smashed, 4 blades broken, security mesh bent'
+  taxonomy_match: ['broken window or glazing']
+  alternative_mentioned=False  coping_mentioned=True  impact_status=ongoing
+  hazard_mechanism: None  mechanism_type=None
+  quote [fault_description]: 'Louvre window glass smashed, 4 blades broken, security mesh bent'
+  quote [taxonomy_match]: 'broken window or glazing'
+  quote [coping_mentioned]: 'Temporarily covered with cardboard'
+  quote [impact_status]: 'broken'
+
+R-809B6628  status=ok  attempts=1
+  fault_description: 'Security screen door hinge bent, door drags on the ground'
+  taxonomy_match: []
+  alternative_mentioned=False  coping_mentioned=False  impact_status=ongoing
+  hazard_mechanism: None  mechanism_type=None
+  quote [fault_description]: 'Security screen door hinge bent, door drags on the ground'
+
+R-92F943AA  status=ok  attempts=1
+  fault_description: 'Power point sparking and scorched, burning smell when kettle is plugged in'
+  taxonomy_match: ['electrical fault: sparking or exposed wires']
+  alternative_mentioned=False  coping_mentioned=False  impact_status=ongoing
+  hazard_mechanism: 'Power point sparking and scorched, burning smell when kettle is plugged in'  mechanism_type=active
+  quote [fault_description]: 'Power point sparking and scorched, burning smell when kettle is plugged in'
+  quote [taxonomy_match]: 'electrical fault: sparking or exposed wires'
+  quote [hazard_mechanism]: 'Power point sparking and scorched, burning smell when kettle is plugged in'
+
+R-4CD00D91  status=ok  attempts=1
+  fault_description: 'Safety switch trips every time the oven is turned on'
+  taxonomy_match: ['stove or cooktop not working']
+  alternative_mentioned=False  coping_mentioned=False  impact_status=ongoing
+  hazard_mechanism: None  mechanism_type=None
+  quote [fault_description]: 'Safety switch trips every time the oven is turned on'
+  quote [taxonomy_match]: 'stove or cooktop not working'
+
+R-CD5974F4  status=ok  attempts=2
+  fault_description: 'Smoke alarm beeping every minute after battery was replaced'
+  taxonomy_match: []
+  alternative_mentioned=False  coping_mentioned=False  impact_status=ongoing
+  hazard_mechanism: None  mechanism_type=None
+  quote [fault_description]: 'Smoke alarm beeping every minute after battery was replaced'
+
+R-B8BC2B1A  status=ok  attempts=1
+  fault_description: 'Outside sensor light not working'
+  taxonomy_match: []
+  alternative_mentioned=False  coping_mentioned=False  impact_status=ongoing
+  hazard_mechanism: None  mechanism_type=None
+  quote [fault_description]: 'Outside sensor light not working'
+
+R-0F433C65  status=ok  attempts=1
+  fault_description: 'Roof leaking during storms, water stain spreading and ceiling sheet sagging'
+  taxonomy_match: ['serious roof leak']
+  alternative_mentioned=False  coping_mentioned=False  impact_status=intermittent
+  hazard_mechanism: 'water stain spreading and ceiling sheet sagging'  mechanism_type=conditional
+  quote [fault_description]: 'Roof leaking during storms, water stain spreading and ceiling sheet sagging'
+  quote [taxonomy_match]: 'serious roof leak'
+  quote [impact_status]: 'during storms'
+  quote [hazard_mechanism]: 'water stain spreading and ceiling sheet sagging'
+
+R-DD2DB354  status=ok  attempts=1
+  fault_description: 'Gutter rusted through and hanging off the fascia above the bedroom'
+  taxonomy_match: []
+  alternative_mentioned=False  coping_mentioned=False  impact_status=ongoing
+  hazard_mechanism: None  mechanism_type=None
+  quote [fault_description]: 'Gutter rusted through and hanging off the fascia above the bedroom'
+
+R-865BEAD3  status=ok  attempts=1
+  fault_description: 'Mould growing on the ceiling and upper wall near the leak'
+  taxonomy_match: []
+  alternative_mentioned=False  coping_mentioned=False  impact_status=ongoing
+  hazard_mechanism: None  mechanism_type=None
+  quote [fault_description]: 'Mould growing on the ceiling and upper wall near the leak'
+
+R-535C3992  status=ok  attempts=1
+  fault_description: 'Ceiling fan wobbles and makes a grinding noise on all speeds'
+  taxonomy_match: []
+  alternative_mentioned=False  coping_mentioned=False  impact_status=ongoing
+  hazard_mechanism: None  mechanism_type=None
+  quote [fault_description]: 'Ceiling fan wobbles and makes a grinding noise on all speeds'
+
+R-DA78A6DF  status=ok  attempts=1
+  fault_description: 'Fire in kitchen started at the wall power point behind the stove. Put out with extinguisher, wiring burnt and exposed'
+  taxonomy_match: ['electrical fault: sparking or exposed wires']
+  alternative_mentioned=False  coping_mentioned=False  impact_status=ongoing
+  hazard_mechanism: 'wiring burnt and exposed'  mechanism_type=active
+  quote [fault_description]: 'Fire in kitchen started at the wall power point behind the stove. Put out with extinguisher, wiring burnt and exposed'
+  quote [taxonomy_match]: 'electrical fault: sparking or exposed wires'
+  quote [hazard_mechanism]: 'wiring burnt and exposed'
+
+R-C89E96E4  status=ok  attempts=1
+  fault_description: 'Hard-wired smoke alarm did not sound during the fire'
+  taxonomy_match: []
+  alternative_mentioned=False  coping_mentioned=False  impact_status=ongoing
+  hazard_mechanism: 'No working smoke alarm in the unit'  mechanism_type=active
+  quote [fault_description]: 'Hard-wired smoke alarm did not sound during the fire'
+  quote [hazard_mechanism]: 'No working smoke alarm in the unit'
+
+R-66F83794  status=ok  attempts=1
+  fault_description: 'Stove, rangehood and splashback burnt and melted, cannot cook'
+  taxonomy_match: ['stove or cooktop not working']
+  alternative_mentioned=False  coping_mentioned=False  impact_status=ongoing
+  hazard_mechanism: None  mechanism_type=None
+  quote [fault_description]: 'Stove, rangehood and splashback burnt and melted, cannot cook'
+  quote [taxonomy_match]: 'stove or cooktop not working'
+
+R-21B0A3AE  status=ok  attempts=1
+  fault_description: 'Smoke and soot damage to ceiling, walls and overhead cupboards'
+  taxonomy_match: ['storm or fire damage']
+  alternative_mentioned=False  coping_mentioned=False  impact_status=ongoing
+  hazard_mechanism: 'Strong smoke smell through the unit'  mechanism_type=active
+  quote [fault_description]: 'Smoke and soot damage to ceiling, walls and overhead cupboards'
+  quote [taxonomy_match]: 'storm or fire damage'
+  quote [hazard_mechanism]: 'Strong smoke smell through the unit'
+
+R-130893AD  status=ok  attempts=1
+  fault_description: 'Fire extinguisher discharged and fire blanket used, both need replacing'
+  taxonomy_match: []
+  alternative_mentioned=False  coping_mentioned=False  impact_status=ongoing
+  hazard_mechanism: None  mechanism_type=None
+  quote [fault_description]: 'Fire extinguisher discharged and fire blanket used, both need replacing'
+
+==============================================================================
+STAGES 3-5 - teammates' stages (placeholders here, output not shown)
+==============================================================================
+
+==============================================================================
+STAGE 6 - RANKING + WHY-TRACE (code)
+==============================================================================
+
+REVIEW BAND (held above and outside the sort)
+  R-809B6628  Ngukurr  'Security screen door hinge bent, door drags on the ground'  [03_Big-Rivers_Ngukurr_break-in-damage.pdf item 3]
+  R-DD2DB354  Wurrumiyanga  'Gutter rusted through and hanging off the fascia above the bedroom'  [05_Top-End_Wurrumiyanga_roof-leak.pdf item 2]
+  R-C89E96E4  Darwin City  'Hard-wired smoke alarm did not sound during the fire'  [report_6_Sabin_fire.pdf item 2]
+  R-81C473B0  Humpty Doo  'Hot water pipe burst behind laundry wall, water flooding laundry and hallway floor'  [01_Greater-Darwin_Humpty-Doo_burst-pipe.pdf item 1]
+  R-46DF407B  Humpty Doo  'Laundry floor vinyl lifting and skirting board swollen from water'  [01_Greater-Darwin_Humpty-Doo_burst-pipe.pdf item 3]
+  R-865BEAD3  Wurrumiyanga  'Mould growing on the ceiling and upper wall near the leak'  [05_Top-End_Wurrumiyanga_roof-leak.pdf item 3]
+  R-535C3992  Wurrumiyanga  'Ceiling fan wobbles and makes a grinding noise on all speeds'  [05_Top-End_Wurrumiyanga_roof-leak.pdf item 4]
+  R-CD5974F4  Ali Curung  'Smoke alarm beeping every minute after battery was replaced'  [04_Barkly-Remote_Ali-Curung_electrical-fault.pdf item 3]
+  R-B8BC2B1A  Ali Curung  'Outside sensor light not working'  [04_Barkly-Remote_Ali-Curung_electrical-fault.pdf item 4]
+  R-C59849C6  Yuendumu  'Evaporative cooler pads worn and smelling musty'  [02_Central-Australia_Yuendumu_air-conditioner.pdf item 3]
+  R-21B0A3AE  Darwin City  'Smoke and soot damage to ceiling, walls and overhead cupboards'  [report_6_Sabin_fire.pdf item 4]
+  R-130893AD  Darwin City  'Fire extinguisher discharged and fire blanket used, both need replacing'  [report_6_Sabin_fire.pdf item 5]
+
+RANKED QUEUE  sort_key = (safety_flag, urgency_tally, -original_timestamp)
+
+#1  [report_6_Sabin_fire.pdf item 1]
+request_id              R-DA78A6DF
+taxonomy_match          electrical fault: sparking or exposed wires  (NT fault list name)
+tier                    dangerous  (NT Government published fault list)
+base_points             3  (from tier, not text)
+no_redundancy           +1  (no working alternative named in the report)
+default                 no-redundancy default applied: +1 (no alternative named)
+urgency_tally           4  (3 + 1)
+safety_flag             true  (mechanism_type=active: full override)
+span:fault_description  "Fire in kitchen started at the wall power point behind the stove. Put out with extinguisher, wiring burnt and exposed"  verified [3]
+span:hazard_mechanism   "wiring burnt and exposed"  verified [3]
+original_timestamp      2026-10-06T00:00:00+09:30  FIFO input, never overwritten
+sort_key                (True, 4, -1791210600)
+position                1 of 10
+SMS: Housing repair R-DA78A6DF: we have your report about "Fire in kitchen started at the wall power point behind the stove. Put out with extinguisher, wiring burnt and exposed". It is marked as a safety job, so it sits above all non-safety jobs. It is classed dangerous on the NT Government published fault list. It is higher priority because you have no other working one. Queue position: 1 of 10. Reply with R-DA78A6DF if things get worse.
+
+#2  [04_Barkly-Remote_Ali-Curung_electrical-fault.pdf item 1]
+request_id              R-92F943AA
+taxonomy_match          electrical fault: sparking or exposed wires  (NT fault list name)
+tier                    dangerous  (NT Government published fault list)
+base_points             3  (from tier, not text)
+no_redundancy           +1  (no working alternative named in the report)
+default                 no-redundancy default applied: +1 (no alternative named)
+urgency_tally           4  (3 + 1)
+safety_flag             true  (mechanism_type=active: full override)
+span:fault_description  "Power point sparking and scorched, burning smell when kettle is plugged in"  verified [3]
+span:hazard_mechanism   "Power point sparking and scorched, burning smell when kettle is plugged in"  verified [3]
+original_timestamp      2026-10-06T07:36:25.850696+09:30  FIFO input, never overwritten
+sort_key                (True, 4, -1791237985)
+position                2 of 10
+SMS: Housing repair R-92F943AA: we have your report about "Power point sparking and scorched, burning smell when kettle is plugged in". It is marked as a safety job, so it sits above all non-safety jobs. It is classed dangerous on the NT Government published fault list. It is higher priority because you have no other working one. Queue position: 2 of 10. Reply with R-92F943AA if things get worse.
+
+#3  [05_Top-End_Wurrumiyanga_roof-leak.pdf item 1]
+request_id              R-0F433C65
+taxonomy_match          serious roof leak  (NT fault list name)
+tier                    dangerous  (NT Government published fault list)
+base_points             3  (from tier, not text)
+no_redundancy           +1  (no working alternative named in the report)
+default                 no-redundancy default applied: +1 (no alternative named)
+urgency_tally           4  (3 + 1)
+safety_flag             false  (mechanism_type=conditional: elevated only, check-in window applies)
+span:fault_description  "Roof leaking during storms, water stain spreading and ceiling sheet sagging"  verified [3]
+span:impact_status      "during storms"  verified [3]
+span:hazard_mechanism   "water stain spreading and ceiling sheet sagging"  verified [3]
+original_timestamp      2026-09-10T00:00:00+09:30  FIFO input, never overwritten
+sort_key                (False, 4, -1788964200)
+position                3 of 10
+SMS: Housing repair R-0F433C65: we have your report about "Roof leaking during storms, water stain spreading and ceiling sheet sagging". It is classed dangerous on the NT Government published fault list. It is higher priority because you have no other working one. Queue position: 3 of 10. Reply with R-0F433C65 if things get worse.
+
+#4  [04_Barkly-Remote_Ali-Curung_electrical-fault.pdf item 2]
+request_id              R-4CD00D91
+taxonomy_match          stove or cooktop not working  (NT fault list name)
+tier                    standard  (NT Government published fault list)
+base_points             2  (from tier, not text)
+no_redundancy           +1  (no working alternative named in the report)
+default                 no-redundancy default applied: +1 (no alternative named)
+urgency_tally           3  (2 + 1)
+safety_flag             false  (no hazard mechanism described)
+span:fault_description  "Safety switch trips every time the oven is turned on"  verified [3]
+original_timestamp      2026-09-22T00:00:00+09:30  FIFO input, never overwritten
+sort_key                (False, 3, -1790001000)
+position                4 of 10
+SMS: Housing repair R-4CD00D91: we have your report about "Safety switch trips every time the oven is turned on". It is classed standard on the NT Government published fault list. It is higher priority because you have no other working one. Queue position: 4 of 10. Reply with R-4CD00D91 if things get worse.
+
+#5  [02_Central-Australia_Yuendumu_air-conditioner.pdf item 1]
+request_id              R-CAE33099
+taxonomy_match          air conditioner not working  (NT fault list name)
+tier                    standard  (NT Government published fault list)
+base_points             2  (from tier, not text)
+no_redundancy           +1  (no working alternative named in the report)
+default                 no-redundancy default applied: +1 (no alternative named)
+urgency_tally           3  (2 + 1)
+safety_flag             false  (no hazard mechanism described)
+span:fault_description  "Split system air conditioner blowing warm air only, indoor unit dripping water"  verified [3]
+original_timestamp      2026-09-28T00:00:00+09:30  FIFO input, never overwritten
+sort_key                (False, 3, -1790519400)
+position                5 of 10
+SMS: Housing repair R-CAE33099: we have your report about "Split system air conditioner blowing warm air only, indoor unit dripping water". It is classed standard on the NT Government published fault list. It is higher priority because you have no other working one. Queue position: 5 of 10. Reply with R-CAE33099 if things get worse.
+
+#6  [02_Central-Australia_Yuendumu_air-conditioner.pdf item 2]
+request_id              R-C85F0509
+taxonomy_match          air conditioner not working  (NT fault list name)
+tier                    standard  (NT Government published fault list)
+base_points             2  (from tier, not text)
+no_redundancy           +1  (no working alternative named in the report)
+default                 no-redundancy default applied: +1 (no alternative named)
+urgency_tally           3  (2 + 1)
+safety_flag             false  (no hazard mechanism described)
+span:fault_description  "Living room air conditioner trips the circuit breaker after 10 minutes"  verified [3]
+original_timestamp      2026-09-28T00:00:00+09:30  FIFO input, never overwritten
+sort_key                (False, 3, -1790519400)
+position                6 of 10
+SMS: Housing repair R-C85F0509: we have your report about "Living room air conditioner trips the circuit breaker after 10 minutes". It is classed standard on the NT Government published fault list. It is higher priority because you have no other working one. Queue position: 6 of 10. Reply with R-C85F0509 if things get worse.
+
+#7  [report_6_Sabin_fire.pdf item 3]
+request_id              R-66F83794
+taxonomy_match          stove or cooktop not working  (NT fault list name)
+tier                    standard  (NT Government published fault list)
+base_points             2  (from tier, not text)
+no_redundancy           +1  (no working alternative named in the report)
+default                 no-redundancy default applied: +1 (no alternative named)
+urgency_tally           3  (2 + 1)
+safety_flag             false  (no hazard mechanism described)
+span:fault_description  "Stove, rangehood and splashback burnt and melted, cannot cook"  verified [3]
+original_timestamp      2026-10-06T00:00:00+09:30  FIFO input, never overwritten
+sort_key                (False, 3, -1791210600)
+position                7 of 10
+SMS: Housing repair R-66F83794: we have your report about "Stove, rangehood and splashback burnt and melted, cannot cook". It is classed standard on the NT Government published fault list. It is higher priority because you have no other working one. Queue position: 7 of 10. Reply with R-66F83794 if things get worse.
+
+#8  [01_Greater-Darwin_Humpty-Doo_burst-pipe.pdf item 2]
+request_id              R-E24376C7
+taxonomy_match          hot water system not working  (NT fault list name)
+tier                    standard  (NT Government published fault list)
+base_points             2  (from tier, not text)
+no_redundancy           +1  (no working alternative named in the report)
+default                 no-redundancy default applied: +1 (no alternative named)
+urgency_tally           3  (2 + 1)
+safety_flag             false  (no hazard mechanism described)
+span:fault_description  "Hot water system not heating since the leak started"  verified [3]
+original_timestamp      2026-10-06T07:36:25.827716+09:30  FIFO input, never overwritten
+sort_key                (False, 3, -1791237985)
+position                8 of 10
+SMS: Housing repair R-E24376C7: we have your report about "Hot water system not heating since the leak started". It is classed standard on the NT Government published fault list. It is higher priority because you have no other working one. Queue position: 8 of 10. Reply with R-E24376C7 if things get worse.
+
+#9  [03_Big-Rivers_Ngukurr_break-in-damage.pdf item 1]
+request_id              R-C5693238
+taxonomy_match          broken external door lock  (NT fault list name)
+tier                    standard  (NT Government published fault list)
+base_points             2  (from tier, not text)
+no_redundancy           +1  (no working alternative named in the report)
+default                 no-redundancy default applied: +1 (no alternative named)
+urgency_tally           3  (2 + 1)
+safety_flag             false  (no hazard mechanism described)
+span:fault_description  "Front door forced open in break-in, lock and door frame split, door will not close or lock"  verified [3]
+original_timestamp      2026-10-06T07:36:25.856574+09:30  FIFO input, never overwritten
+sort_key                (False, 3, -1791237985)
+position                9 of 10
+SMS: Housing repair R-C5693238: we have your report about "Front door forced open in break-in, lock and door frame split, door will not close or lock". It is classed standard on the NT Government published fault list. It is higher priority because you have no other working one. Queue position: 9 of 10. Reply with R-C5693238 if things get worse.
+
+#10  [03_Big-Rivers_Ngukurr_break-in-damage.pdf item 2]
+request_id              R-BF148A7C
+taxonomy_match          broken window or glazing  (NT fault list name)
+tier                    standard  (NT Government published fault list)
+base_points             2  (from tier, not text)
+no_redundancy           +1  (no working alternative named in the report)
+default                 no-redundancy default applied: +1 (no alternative named)
+urgency_tally           3  (2 + 1)
+safety_flag             false  (no hazard mechanism described)
+span:fault_description  "Louvre window glass smashed, 4 blades broken, security mesh bent"  verified [3]
+span:coping_mentioned   "Temporarily covered with cardboard"  verified [3]
+span:impact_status      "broken"  verified [3]
+original_timestamp      2026-10-06T07:36:25.856574+09:30  FIFO input, never overwritten
+sort_key                (False, 3, -1791237985)
+position                10 of 10
+SMS: Housing repair R-BF148A7C: we have your report about "Louvre window glass smashed, 4 blades broken, security mesh bent". It is classed standard on the NT Government published fault list. It is higher priority because you have no other working one. Queue position: 10 of 10. Reply with R-BF148A7C if things get worse.

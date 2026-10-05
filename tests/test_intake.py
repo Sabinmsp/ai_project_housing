@@ -9,7 +9,7 @@ from triage.intake import (
     UnknownRequestError,
     create_report,
 )
-from triage.models import SourceTag
+from triage.models import Report, SourceTag
 
 T0 = datetime(2026, 9, 1, 8, 0, tzinfo=timezone(timedelta(hours=9, minutes=30)))
 
@@ -35,6 +35,22 @@ def test_invalid_source_tag_rejected():
 def test_naive_timestamp_rejected():
     with pytest.raises(ValidationError):
         make(original_report_timestamp=datetime(2026, 9, 1, 8, 0))
+
+
+def test_report_carries_only_intake_fields():
+    """Stage 1 stamps; it never interprets. No tier, score or rank can exist here."""
+    assert set(Report.model_fields) == {
+        "request_id", "tenant_id", "raw_text", "source_tag", "community",
+        "original_report_timestamp",
+        # provenance only: where the report came from
+        "region", "source_file", "source_item", "timestamp_source",
+    }
+    with pytest.raises(ValidationError):
+        Report(**make().model_dump(), urgency_tally=4)
+
+
+def test_request_ids_are_unique():
+    assert len({make().request_id for _ in range(500)}) == 500
 
 
 def test_empty_text_rejected():

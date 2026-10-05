@@ -9,6 +9,7 @@ from triage.extraction import (
     OfflineExtractor,
     build_user_prompt,
     extract,
+    response_schema,
 )
 from triage.intake import create_report
 from triage.models import ExtractedFacts, ExtractionStatus
@@ -45,7 +46,8 @@ GOOD = json.dumps({
     "impact_status": "ongoing",
     "hazard_mechanism": None,
     "mechanism_type": None,
-    "quoted_spans": [{"field": "fault_description", "text": "toilet blocked"}],
+    "quoted_spans": [{"field": "fault_description", "text": "toilet blocked"},
+                     {"field": "taxonomy_match", "text": "toilet blocked"}],
 })
 
 
@@ -59,9 +61,38 @@ def test_prompt_contains_no_tier_or_scoring_information():
 
 
 def test_response_schema_has_no_numeric_fields():
-    schema_text = json.dumps(ExtractedFacts.model_json_schema())
-    assert '"integer"' not in schema_text
-    assert '"number"' not in schema_text
+    for schema in (ExtractedFacts.model_json_schema(), response_schema()):
+        schema_text = json.dumps(schema)
+        assert '"integer"' not in schema_text
+        assert '"number"' not in schema_text
+
+
+def test_schema_sent_to_model_has_no_scoring_language():
+    """Panel A covers everything the model sees, the schema included."""
+    text = json.dumps(response_schema()).lower()
+    for word in ("dangerous", "standard", "tier", "points", "score", "rank", "priority",
+                 "severity", "urgen"):
+        assert word not in text, word
+
+
+def test_response_schema_is_strict():
+    """Strict structured output: every object lists all its properties as
+    required and allows no others, so the provider enforces the shape."""
+    def objects(node):
+        if isinstance(node, dict):
+            if node.get("type") == "object":
+                yield node
+            for v in node.values():
+                yield from objects(v)
+        elif isinstance(node, list):
+            for v in node:
+                yield from objects(v)
+
+    found = list(objects(response_schema()))
+    assert len(found) == 2  # ExtractedFacts and QuotedSpan
+    for obj in found:
+        assert obj["additionalProperties"] is False
+        assert set(obj["required"]) == set(obj["properties"])
 
 
 # --- validation boundary --------------------------------------------------
@@ -107,11 +138,35 @@ def test_hazard_needs_mechanism_type():
         ExtractedFacts.model_validate(bad)
 
 
-def test_extra_fields_like_severity_rejected():
+@pytest.mark.parametrize("field, value", [
+    ("severity", "high"), ("priority", "urgent"), ("rank", 1), ("tier", "dangerous"),
+    ("urgency", "high"), ("urgency_tally", 4), ("points", 3), ("score", 0.9),
+    ("safety_flag", True),
+])
+def test_llm_cannot_add_scoring_fields(field, value):
+    """The model has no way to hand a score, tier or rank to later stages."""
     bad = json.loads(GOOD)
-    bad["severity"] = "high"
+    bad[field] = value
     with pytest.raises(ValueError):
         ExtractedFacts.model_validate(bad)
+    c = ScriptedClient(json.dumps(bad), json.dumps(bad))
+    assert extract(report("toilet blocked"), c).status is ExtractionStatus.FLAGGED_FOR_HUMAN
+
+
+def test_taxonomy_match_without_span_rejected():
+    bad = json.loads(GOOD)
+    bad["quoted_spans"] = [s for s in bad["quoted_spans"] if s["field"] != "taxonomy_match"]
+    with pytest.raises(ValueError, match="taxonomy_match"):
+        ExtractedFacts.model_validate(bad)
+
+
+def test_intermittent_without_span_rejected():
+    bad = json.loads(GOOD)
+    bad["impact_status"] = "intermittent"
+    with pytest.raises(ValueError, match="impact_status"):
+        ExtractedFacts.model_validate(bad)
+    bad["quoted_spans"].append({"field": "impact_status", "text": "on and off"})
+    assert ExtractedFacts.model_validate(bad).impact_status == "intermittent"
 
 
 # --- offline reader: Panel B, same fault three phrasings ------------------

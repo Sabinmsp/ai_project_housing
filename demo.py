@@ -38,7 +38,8 @@ def _standin_stages_3_to_5(report, facts) -> EnrichedJob:
     tiers = [_STANDIN_TIERS[m] for m in facts.taxonomy_match if m in _STANDIN_TIERS]
     common = dict(request_id=report.request_id, community=report.community,
                   original_report_timestamp=report.original_report_timestamp,
-                  fault_description=facts.fault_description, spans=spans,
+                  fault_description=facts.fault_description,
+                  taxonomy_match=facts.taxonomy_match, spans=spans,
                   distance_cost_km=_STANDIN_DISTANCE.get(report.community))
     if not tiers:
         return EnrichedJob(**common)
@@ -64,6 +65,14 @@ def _load_dotenv(path: Path = Path(__file__).with_name(".env")) -> None:
             os.environ.setdefault(key.strip(), value.strip())
 
 
+def _heading(title: str) -> None:
+    print(f"\n{'=' * 78}\n{title}\n{'=' * 78}")
+
+
+def _one_line(text: str) -> str:
+    return text.replace("\n", " | ")
+
+
 def main() -> None:
     _load_dotenv()
     folder = Path(sys.argv[1]) if len(sys.argv) > 1 else REPORTS_DIR
@@ -71,38 +80,72 @@ def main() -> None:
         sys.exit(f"Report folder not found: {folder}")
     repo = SQLiteReportRepository()
     client = default_client()
-    print(f"extractor: {client.name}")
 
+    # ---- STAGE 1: intake ---------------------------------------------------
     reports, skipped = load_reports(folder)
-    print(f"reports: {len(reports)} read from {folder}/")
-    for path, why in skipped:
-        print(f"  skipped {path.name}: {why}")
     for report in reports:
         try:
             repo.save(report)
         except DuplicateRequestError:
-            print(f"  skipped duplicate request_id {report.request_id}")
+            skipped.append((Path(report.request_id), "duplicate request_id"))
+    _heading(f"STAGE 1 - INTAKE (code)   {len(reports)} reports from {folder}/")
+    for path, why in skipped:
+        print(f"  skipped {path.name}: {why}")
     if not reports:
         print("Nothing to rank. Add .pdf or .txt reports to the folder.")
         return
-    print()
 
-    jobs = []
+    def origin(request_id: str) -> str:
+        r = repo.get(request_id)
+        if r is None or not r.source_file:
+            return ""
+        item = f" item {r.source_item}" if r.source_item else ""
+        return f"  [{r.source_file}{item}]"
+
+    for r in repo.all():
+        print(f"\n{r.request_id}{origin(r.request_id)}")
+        print(f"  tenant_id={r.tenant_id}  source_tag={r.source_tag.value}  "
+              f"community={r.community}" + (f"  region={r.region}" if r.region else ""))
+        print(f"  original_report_timestamp={r.original_report_timestamp.isoformat()}"
+              + (f"  ({r.timestamp_source})" if r.timestamp_source else ""))
+        print(f"  raw_text: {_one_line(r.raw_text)!r}")
+
+    # ---- STAGE 2: extraction (the only model call) -------------------------
+    _heading(f"STAGE 2 - EXTRACTION (model reads only)   extractor: {client.name}")
+    extracted = []
     for report in repo.all():
         res = extract(report, client)
-        if res.status is not ExtractionStatus.OK:
-            print(f"{report.request_id}: {res.status.value}, coordinator follow-up")
+        print(f"\n{report.request_id}  status={res.status.value}  attempts={res.attempts}")
+        if res.facts is None:
+            print(f"  -> coordinator follow-up: {res.errors}")
             continue
-        jobs.append(_standin_stages_3_to_5(report, res.facts))
+        f = res.facts
+        print(f"  fault_description: {f.fault_description!r}")
+        print(f"  taxonomy_match: {f.taxonomy_match}")
+        print(f"  alternative_mentioned={f.alternative_mentioned}  "
+              f"coping_mentioned={f.coping_mentioned}  impact_status={f.impact_status}")
+        print(f"  hazard_mechanism: {f.hazard_mechanism!r}  mechanism_type={f.mechanism_type}")
+        for span in f.quoted_spans:
+            print(f"  quote [{span.field}]: {span.text!r}")
+        if res.status is ExtractionStatus.OK:
+            extracted.append((report, f))
+        else:
+            print("  -> no fault named: out of scope, coordinator contacts tenant")
 
+    # ---- STAGES 3-5: teammates (placeholders in this demo) ----------------
+    jobs = [_standin_stages_3_to_5(report, facts) for report, facts in extracted]
+    _heading("STAGES 3-5 - teammates' stages (placeholders here, output not shown)")
+
+    # ---- STAGE 6: ranking + why-trace -------------------------------------
     result = rank(jobs)
-    print("\nREVIEW BAND (held above the sort)")
+    _heading("STAGE 6 - RANKING + WHY-TRACE (code)")
+    print("\nREVIEW BAND (held above and outside the sort)")
     for e in result.review_band:
-        print(f"  {e.request_id}  {e.community}  {e.fault_description!r}")
+        print(f"  {e.request_id}  {e.community}  {e.fault_description!r}{origin(e.request_id)}")
 
-    print("\nRANKED QUEUE")
+    print(f"\nRANKED QUEUE  sort_key = (safety_flag, urgency_tally, -original_timestamp)")
     for tr in result.traces:
-        print(f"\n#{tr.position}")
+        print(f"\n#{tr.position}{origin(tr.request_id)}")
         print(render_coordinator(tr))
         print("SMS:", render_tenant_sms(tr))
 

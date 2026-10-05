@@ -26,6 +26,10 @@ def create_report(
     community: str,
     original_report_timestamp: datetime,
     request_id: Optional[str] = None,
+    region: Optional[str] = None,
+    source_file: Optional[str] = None,
+    source_item: Optional[int] = None,
+    timestamp_source: Optional[str] = None,
 ) -> Report:
     """Build a Report.
 
@@ -40,6 +44,10 @@ def create_report(
         source_tag=SourceTag(source_tag),
         community=community,
         original_report_timestamp=original_report_timestamp,
+        region=region,
+        source_file=source_file,
+        source_item=source_item,
+        timestamp_source=timestamp_source,
     )
 
 
@@ -71,7 +79,11 @@ class SQLiteReportRepository:
                 raw_text TEXT NOT NULL,
                 source_tag TEXT NOT NULL,
                 community TEXT NOT NULL,
-                original_report_timestamp TEXT NOT NULL
+                original_report_timestamp TEXT NOT NULL,
+                region TEXT,
+                source_file TEXT,
+                source_item INTEGER,
+                timestamp_source TEXT
             )
             """
         )
@@ -90,7 +102,7 @@ class SQLiteReportRepository:
     def save(self, report: Report) -> None:
         try:
             self._conn.execute(
-                "INSERT INTO reports VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO reports VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     report.request_id,
                     report.tenant_id,
@@ -98,6 +110,10 @@ class SQLiteReportRepository:
                     report.source_tag.value,
                     report.community,
                     report.original_report_timestamp.isoformat(),
+                    report.region,
+                    report.source_file,
+                    report.source_item,
+                    report.timestamp_source,
                 ),
             )
             self._conn.commit()
@@ -113,6 +129,10 @@ class SQLiteReportRepository:
             source_tag=SourceTag(row[3]),
             community=row[4],
             original_report_timestamp=datetime.fromisoformat(row[5]),
+            region=row[6],
+            source_file=row[7],
+            source_item=row[8],
+            timestamp_source=row[9],
         )
 
     def _followups(self, request_id: str) -> list[str]:

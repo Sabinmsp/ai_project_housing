@@ -1,5 +1,7 @@
 """Property tests: the equity guarantee as executable assertions."""
+import ast
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -115,13 +117,63 @@ def test_every_trace_is_arithmetically_consistent(jobs):
         assert tr.sort_key == sort_key(job)
 
 
+# --- the model cannot influence order ------------------------------------
+# Everything Stage 2's model produces (fault text, taxonomy matches, quoted
+# spans, coping/alternative wording) reaches Stage 6 only through fields that
+# are not in the sort key. Vary all of them at once: the order must not move.
+
+_SPLITS = {4: [("dangerous", 3, 1)], 3: [("dangerous", 3, 0), ("standard", 2, 1)],
+           2: [("standard", 2, 0)]}
+_WORDS = st.text(alphabet="abcdefghij klmnop", min_size=1, max_size=30)
+
+
+@given(queues, st.data())
+def test_only_safety_tally_and_timestamp_decide_order(jobs, data):
+    before = [j.request_id for j in rank(jobs).ranked]
+    mutated = []
+    for j in jobs:
+        tier, base, nr = data.draw(st.sampled_from(_SPLITS[j.urgency_tally]))
+        level = "active" if j.safety_flag else data.draw(st.sampled_from(["conditional", "none"]))
+        mutated.append(j.model_copy(update={
+            "fault_description": data.draw(st.one_of(st.none(), _WORDS)),
+            "taxonomy_match": data.draw(st.lists(_WORDS, max_size=3)),
+            "spans": [VerifiedSpan(field=f, text=t, verified=v) for f, t, v in data.draw(
+                st.lists(st.tuples(st.sampled_from(["fault_description", "taxonomy_match",
+                                                    "coping_mentioned", "hazard_mechanism"]),
+                                   _WORDS, st.booleans()), max_size=4))],
+            "flags": data.draw(st.lists(st.sampled_from(["ambiguity_flag", "unverified_span"]),
+                                        max_size=2)),
+            "tier": tier, "base_points": base, "no_redundancy": nr,
+            "safety_level": level,
+            "distance_cost_km": data.draw(st.one_of(st.none(), st.floats(0, 5000, allow_nan=False))),
+            "community": data.draw(st.sampled_from(COMMUNITIES)),
+        }))
+    after = [j.request_id for j in rank(mutated).ranked]
+    assert before == after
+
+
+def test_ranking_module_has_no_model_access():
+    """Stage 6 is pure: it imports only the shared models, so no code path
+    from ranking can reach an LLM client."""
+    src = (Path(__file__).resolve().parents[1] / "triage" / "ranking.py").read_text()
+    imported = set()
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Import):
+            imported |= {a.name for a in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            imported.add(("." * node.level) + (node.module or ""))
+    assert imported <= {"__future__", "typing", ".models"}, imported
+    for word in ("openai", "complete_json", "LLMClient", "extraction"):
+        assert word not in src, word
+
+
 # --- Panel D worked example ----------------------------------------------
 
 def panel_d_job():
     return EnrichedJob(
         request_id="R-2291", community="Wadeye",
         original_report_timestamp=datetime.fromtimestamp(1726041600, tz=timezone.utc),
-        fault_description="roof leaking",
+        fault_description="roof leaking", taxonomy_match=["serious roof leak"],
         tier="dangerous", base_points=3, no_redundancy=1, urgency_tally=4,
         safety_flag=True, safety_level="active",
         spans=[VerifiedSpan(field="hazard_mechanism",
@@ -134,10 +186,32 @@ def panel_d_job():
 def test_panel_d_trace():
     tr = rank([panel_d_job()]).traces[0]
     assert tr.sort_key == (True, 4, -1726041600)
+    assert tr.original_report_timestamp == datetime.fromtimestamp(1726041600, tz=timezone.utc)
+    assert tr.taxonomy_match == ["serious roof leak"]
+    assert tr.defaults_applied == ["no-redundancy default applied: +1 (no alternative named)"]
+    assert "mechanism_type=active" in tr.safety_reason
     assert [s.text for s in tr.evidence_spans] == ["water coming through the light fitting"]
     view = render_coordinator(tr)
     assert "412 km" in view and "not in sort_key" in view
+    assert "serious roof leak" in view and "2024-09-11" in view
     assert "made up" not in view  # unverified spans never reach an audience
+
+
+def test_trace_text_is_tenant_words_never_model_wording():
+    """Panel D: no value in the trace originates inside the model. The model's
+    own fault_description is replaced by the Stage 3 verified span."""
+    job = panel_d_job().model_copy(update={
+        "fault_description": "roof leaking. model stitched this sentence together",
+        "spans": [VerifiedSpan(field="fault_description", text="invented by model", verified=False),
+                  VerifiedSpan(field="fault_description", text="roof leaking", verified=True)],
+    })
+    tr = rank([job]).traces[0]
+    assert tr.fault_description == "roof leaking"
+    sms = render_tenant_sms(tr)
+    assert "stitched" not in sms and "invented" not in sms
+    no_span = rank([job.model_copy(update={"spans": []})]).traces[0]
+    assert no_span.fault_description is None
+    assert '"your repair"' in render_tenant_sms(no_span)
 
 
 def test_tenant_sms_uses_only_trace_fields_and_hides_distance():
