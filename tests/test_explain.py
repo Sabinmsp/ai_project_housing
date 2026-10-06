@@ -109,6 +109,12 @@ def test_tenant_sms_invariant_to_position_queue_and_decided_by() -> None:
     assert render_tenant_sms(moved) == render_tenant_sms(middle)
 
 
+def test_other_job_id_reaches_coordinator_never_tenant() -> None:
+    (tr,) = traces(standard_job("R-3F9A1C2B", shared_route_opportunities=["R-7D04E8A1"]))
+    assert "R-7D04E8A1" not in render_tenant_sms(tr)
+    assert "R-7D04E8A1" in render_coordinator(tr)
+
+
 def test_safety_sms_says_safety_job_without_comparison() -> None:
     (tr,) = traces(panel_d_job())
     sms = render_tenant_sms(tr)
