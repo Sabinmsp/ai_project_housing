@@ -246,3 +246,28 @@ def test_coordinator_never_says_nt_fault_list_name(name: str) -> None:
     view = render_coordinator(tr)
     assert "NT fault list name" not in view
     assert any(name in line and line.endswith("(reference list name)") for line in view.splitlines())
+
+
+# --- invariant 10: tenant SMS never carries flags or reasons -------------------------
+
+TENANT_UNSAFE_FLAGS = (
+    "Report plays down a fault on the repair-first list: 'nothing too bad' vs 'sewage up the shower' — check before scheduling",
+    "Safety claim — unconfirmed: 'gonna electrocute the kids' — fast human check, no override",
+    "Quoted words not found in the report: 'sparks shooting out' — check the reading",
+)
+
+
+def test_tenant_sms_ignores_flags_and_reasons() -> None:
+    (plain,) = traces(panel_d_job())
+    flagged = ReasoningTrace.model_validate({
+        **plain.model_dump(),
+        "flags": TENANT_UNSAFE_FLAGS,
+        "safety_reason": "Unclear hazard: 'sparks shooting out' — treated as conditional",
+        "tally_reasons": ("Alternative named in report: +0",),
+    })
+    sms = render_tenant_sms(flagged)
+    assert sms == render_tenant_sms(plain)
+    for text in (*TENANT_UNSAFE_FLAGS, flagged.safety_reason, *flagged.tally_reasons):
+        assert text not in sms
+    for fragment in ("plays down", "unconfirmed", "isn't in the report", "not found", "nothing too bad"):
+        assert fragment not in sms

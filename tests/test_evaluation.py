@@ -229,26 +229,38 @@ def test_coping_never_changes_result(match: list[str], alternative: bool, sign: 
     assert with_coping == tally(names, unverified, alternative=alternative, sign=sign, coping=False)
 
 
-@given(matches, st.booleans(), st.booleans(), unverified_sets, tally_pairs)
-def test_more_unverified_never_lowers_tally(
-    match: list[str], alternative: bool, sign: bool, unverified: Unverified, extra: tuple[str, str]
-) -> None:
+@given(matches, st.booleans())
+def test_unverified_alternative_scores_as_if_not_named(match: list[str], sign: bool) -> None:
     names = list(dict.fromkeys(match))
-    before = tally(names, unverified, alternative=alternative, sign=sign).tally
-    after = tally(names, unverified | {extra}, alternative=alternative, sign=sign).tally
-    assert (before is None and after is None) or (after is not None and before is not None and after >= before)
+    ignored = tally(names, frozenset({("alternative_mentioned", "quoted")}), alternative=True, sign=sign).tally
+    assert ignored == tally(names, alternative=False, sign=sign).tally
+
+
+@given(matches, st.booleans())
+def test_unverified_sign_scores_as_the_fault(match: list[str], alternative: bool) -> None:
+    names = list(dict.fromkeys(match))
+    ignored = tally(names, frozenset({("fault_or_sign", "quoted")}), alternative=alternative, sign=True).tally
+    assert ignored == tally(names, alternative=alternative, sign=False).tally
+
+
+def oracle_tally(names: list[str], alternative: bool, sign: bool, unverified: Unverified) -> int | None:
+    """Independent restatement of §4.2/§4.3: base by tier, +1 unless degraded or a verified +0 claim."""
+    failed = {field for field, _ in unverified}
+    zero = (alternative and "alternative_mentioned" not in failed) or (sign and "fault_or_sign" not in failed)
+    scores = [
+        (3 if TIER_TABLE[n].tier == "dangerous" else 2) + (0 if TIER_TABLE[n].degraded or zero else 1)
+        for n in names
+    ]
+    return max(scores) if scores else None
 
 
 @given(matches, st.booleans(), st.booleans(), st.booleans(), unverified_sets)
-def test_tally_in_range_whenever_tier_set(
+def test_tally_matches_oracle(
     match: list[str], alternative: bool, sign: bool, coping: bool, unverified: Unverified
 ) -> None:
     names = list(dict.fromkeys(match))
     result = tally(names, unverified, alternative=alternative, sign=sign, coping=coping)
-    if lookup_tier(names).tier is None:
-        assert result.tally is None
-    else:
-        assert result.tally in {2, 3, 4}
+    assert result.tally == oracle_tally(names, alternative, sign, unverified)
 
 
 # --- compute_safety: §4.5 table and grounds examples --------------------------
@@ -331,12 +343,11 @@ def test_safety_independent_of_taxonomy_match(match: list[str], hazard: Hazard, 
     )
 
 
-@given(hazards, harms, safety_unverified, safety_pairs)
-def test_more_unverified_never_lowers_level(
-    hazard: Hazard, harm: str | None, unverified: Unverified, extra: tuple[str, str]
-) -> None:
+@given(hazards, harms)
+def test_unverified_hazard_quote_keeps_the_level(hazard: Hazard, harm: str | None) -> None:
     f = facts([], hazard=hazard, harm=harm)
-    assert compute_safety(f, unverified | {extra}).level >= compute_safety(f, unverified).level
+    hazard_pairs = frozenset((s.field, s.text) for s in f.quoted_spans if s.field == "hazard")
+    assert compute_safety(f, hazard_pairs).level == compute_safety(f, frozenset()).level
 
 
 @given(hazards, harms, safety_unverified)
@@ -476,7 +487,7 @@ def test_flags_ordered_safety_ambiguity_tally_mismatch_unverified() -> None:
     matches, hazards, harms, st.booleans(), st.booleans(),
     st.sampled_from([None, OVER, UNDER]), st.data(),
 )
-def test_evaluate_flags_never_blank_or_duplicated(
+def test_evaluate_flags_complete_never_blank_or_duplicated(
     match: list[str], hazard: Hazard, harm: str | None, alternative: bool, sign: bool,
     mismatch: tuple[str, str, str] | None, data: st.DataObject,
 ) -> None:
@@ -484,9 +495,17 @@ def test_evaluate_flags_never_blank_or_duplicated(
     f = facts(names, alternative=alternative, sign=sign, hazard=hazard, harm=harm, mismatch=mismatch, fault="fault")
     pairs = sorted({(s.field, s.text) for s in f.quoted_spans})
     unverified = data.draw(st.frozensets(st.sampled_from(pairs)))
-    flags = evaluate(f, unverified).flags
+    result = evaluate(f, unverified)
+    flags = result.flags
     assert all(flag.strip() for flag in flags)
     assert len(flags) == len(set(flags))
+    tier = lookup_tier(f.taxonomy_match)
+    components = {
+        *compute_safety(f, unverified).flags,
+        *compute_tally(tier, f, unverified).flags,
+        *(flag for flag in (tier.flag, mismatch_flag(f, tier, unverified), unverified_flag(f, unverified)) if flag),
+    }
+    assert components <= set(flags)
 
 
 
