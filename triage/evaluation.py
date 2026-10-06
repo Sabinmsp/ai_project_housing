@@ -146,3 +146,29 @@ def compute_safety(facts: ExtractedFacts, unverified: frozenset[str]) -> SafetyR
     if level > 0 and "hazard" in unverified:
         flags.append(UNVERIFIED_HAZARD)
     return SafetyResult(level=level, reason=reason, flags=tuple(flags))
+
+
+# FR16c: these two only flag. They never return or change a tally or level.
+
+
+def mismatch_flag(facts: ExtractedFacts, tier: TierResult) -> Reason | None:
+    """Flag a claim stronger than the report's details, or a played-down repair-first fault."""
+    if facts.claim_mismatch is None:
+        return None
+    claim, detail = _quote(facts, "mismatch_claim"), _quote(facts, "mismatch_detail")
+    if facts.claim_mismatch == "over":
+        return f"Claim stronger than the report's own details: '{claim}' vs '{detail}' — check before acting"
+    # §3.2.2 Field 8: the model never sees tiers, so code keeps "under" for dangerous-tier faults only.
+    if tier.tier == "dangerous":
+        return f"Report plays down a fault on the repair-first list: '{claim}' vs '{detail}' — check before scheduling"
+    return None
+
+
+def unverified_flag(facts: ExtractedFacts, unverified: frozenset[str]) -> Reason | None:
+    """Flag every quote whose field failed verification, even when no score moved."""
+    # §3.2.5: a fabricated quote means the extraction itself is unreliable.
+    quotes = dict.fromkeys(s.text for s in facts.quoted_spans if s.field in unverified)  # dedupe, keep order
+    if not quotes:
+        return None
+    listed = ", ".join(f"'{q}'" for q in quotes)
+    return f"Quoted words not found in the report: {listed} — check the reading"

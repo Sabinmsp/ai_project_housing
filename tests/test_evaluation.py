@@ -17,6 +17,8 @@ from triage.evaluation import (
     TallyResult,
     compute_safety,
     compute_tally,
+    mismatch_flag,
+    unverified_flag,
     lookup_tier,
 )
 from triage.models import ExtractedFacts
@@ -120,6 +122,7 @@ def facts(
     sign: bool = False,
     hazard: Hazard = None,
     harm: str | None = None,  # harm quote
+    mismatch: tuple[str, str, str] | None = None,  # (direction, claim quote, detail quote)
 ) -> ExtractedFacts:
     spans = [{"field": "taxonomy_match", "text": "quoted"}] if names else []
     spans += [{"field": f, "text": "quoted"} for f, on in
@@ -129,6 +132,8 @@ def facts(
         spans.append({"field": "hazard", "text": hazard_quote})
     if harm:
         spans.append({"field": "harm_claimed", "text": harm})
+    if mismatch:
+        spans += [{"field": "mismatch_claim", "text": mismatch[1]}, {"field": "mismatch_detail", "text": mismatch[2]}]
     return ExtractedFacts.model_validate({
         "taxonomy_match": names,
         "alternative_mentioned": alternative,
@@ -137,7 +142,7 @@ def facts(
         "mechanism_type": mechanism,
         "harm_claimed": harm is not None,
         "fault_or_sign": "sign" if sign else "fault",
-        "claim_mismatch": None,
+        "claim_mismatch": mismatch[0] if mismatch else None,
         "worsening_mentioned": False,
         "quoted_spans": spans,
     })
@@ -328,3 +333,56 @@ def test_level_2_iff_described_active(hazard: Hazard, harm: str | None, unverifi
     f = facts([], hazard=hazard, harm=harm)
     is_active = f.hazard_status == "described" and f.mechanism_type == "active"
     assert (compute_safety(f, unverified).level == 2) == is_active
+
+
+# --- mismatch_flag and unverified_flag ------------------------------------------
+
+OVER = ("over", "it's an emergency, flooding everywhere", "small drip under the sink")
+UNDER = ("under", "nothing too bad", "sewage coming up through the shower")
+
+
+def assert_quotes_in(flag: str | None, *quotes: str) -> None:
+    assert flag is not None
+    for q in quotes:
+        assert f"'{q}'" in flag
+
+
+def test_over_on_standard_tier_flags() -> None:
+    flag = mismatch_flag(facts([TAP], mismatch=OVER), lookup_tier([TAP]))
+    assert flag is not None and flag.startswith("Claim stronger than the report's own details")
+    assert_quotes_in(flag, OVER[1], OVER[2])
+
+
+def test_under_on_dangerous_tier_flags() -> None:
+    flag = mismatch_flag(facts([SEWAGE], mismatch=UNDER), lookup_tier([SEWAGE]))
+    assert flag is not None and flag.startswith("Report plays down a fault on the repair-first list")
+    assert_quotes_in(flag, UNDER[1], UNDER[2])
+
+
+def test_under_on_standard_tier_not_flagged() -> None:
+    assert mismatch_flag(facts([TAP], mismatch=UNDER), lookup_tier([TAP])) is None
+
+
+def test_under_with_no_tier_not_flagged() -> None:
+    assert mismatch_flag(facts([], mismatch=UNDER), lookup_tier([])) is None
+
+
+def test_no_mismatch_not_flagged() -> None:
+    assert mismatch_flag(facts([SEWAGE]), lookup_tier([SEWAGE])) is None
+
+
+def test_one_unverified_span_flagged_with_its_quote() -> None:
+    f = facts([], hazard=("described", "active", LIGHT), harm=ELECTROCUTE)
+    flag = unverified_flag(f, frozenset({"hazard"}))
+    assert flag == f"Quoted words not found in the report: '{LIGHT}' — check the reading"
+
+
+def test_two_unverified_spans_give_one_flag_listing_both() -> None:
+    f = facts([], hazard=("described", "active", LIGHT), harm=ELECTROCUTE)
+    flag = unverified_flag(f, frozenset({"harm_claimed", "hazard"}))
+    assert flag == f"Quoted words not found in the report: '{LIGHT}', '{ELECTROCUTE}' — check the reading"
+
+
+def test_nothing_unverified_not_flagged() -> None:
+    f = facts([], hazard=("described", "active", LIGHT), harm=ELECTROCUTE)
+    assert unverified_flag(f, frozenset()) is None
