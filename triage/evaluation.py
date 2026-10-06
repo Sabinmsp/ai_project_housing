@@ -130,9 +130,15 @@ class SafetyResult(BaseModel):
     flags: tuple[Reason, ...]
 
 
-def _quote(facts: ExtractedFacts, field: str) -> str:
-    # The validator guarantees a span for every claimed field, so next() always finds one.
-    return next(s.text for s in facts.quoted_spans if s.field == field)
+def _quote(facts: ExtractedFacts, field: str, unverified: Unverified) -> str:
+    # Cite a verified quote when there is one, so a reason never repeats words the report doesn't
+    # contain. The validator guarantees a span for every claimed field, so texts is never empty.
+    texts = [s.text for s in facts.quoted_spans if s.field == field]
+    return next((t for t in texts if (field, t) not in unverified), texts[0])
+
+
+def _none_verified(facts: ExtractedFacts, field: str, unverified: Unverified) -> bool:
+    return all((field, s.text) in unverified for s in facts.quoted_spans if s.field == field)
 
 
 def compute_safety(facts: ExtractedFacts, unverified: Unverified) -> SafetyResult:
@@ -140,7 +146,7 @@ def compute_safety(facts: ExtractedFacts, unverified: Unverified) -> SafetyResul
     # §4.4, Safety G1: safety is independent of tier, so taxonomy_match is never read.
     flags: list[str] = []
     if facts.hazard_status == "described":
-        quote = _quote(facts, "hazard")
+        quote = _quote(facts, "hazard", unverified)
         # Safety G3: active is a full override; conditional is elevated only.
         if facts.mechanism_type == "active":
             level, reason = 2, f"Active hazard described: '{quote}' — full override"
@@ -148,7 +154,7 @@ def compute_safety(facts: ExtractedFacts, unverified: Unverified) -> SafetyResul
             level, reason = 1, f"Conditional hazard described: '{quote}' — elevated, does not bypass active hazards"
         # D3: a described pathway always wins, so harm_claimed adds no G5 flag (§4.5).
     elif facts.hazard_status == "unclear":
-        quote = _quote(facts, "hazard")
+        quote = _quote(facts, "hazard", unverified)
         # §4.5 / invariant 8: unclear errs high to conditional. Self-mitigation is not a field,
         # so avoidance ("we avoid that spot") can't lower it.
         level, reason = 1, f"Unclear hazard: '{quote}' — treated as conditional"
@@ -160,10 +166,11 @@ def compute_safety(facts: ExtractedFacts, unverified: Unverified) -> SafetyResul
         # flag fires even if the harm quote is unverified, since dropping it would lower the outcome.
         if facts.harm_claimed:
             flags.append(
-                f"Safety claim — unconfirmed: '{_quote(facts, 'harm_claimed')}' — fast human check, no override"
+                f"Safety claim — unconfirmed: '{_quote(facts, 'harm_claimed', unverified)}' — fast human check, no override"
             )
     # D1 (invariant 8): an unverified hazard quote never lowers the level; a human checks it.
-    if level > 0 and any(field == "hazard" for field, _ in unverified):
+    # One verified quote backs the level, so only flag when none is verified.
+    if level > 0 and _none_verified(facts, "hazard", unverified):
         flags.append(UNVERIFIED_HAZARD)
     return SafetyResult(level=level, reason=reason, flags=tuple(flags))
 
@@ -171,11 +178,11 @@ def compute_safety(facts: ExtractedFacts, unverified: Unverified) -> SafetyResul
 # FR16c: these two only flag. They never return or change a tally or level.
 
 
-def mismatch_flag(facts: ExtractedFacts, tier: TierResult) -> Reason | None:
+def mismatch_flag(facts: ExtractedFacts, tier: TierResult, unverified: Unverified) -> Reason | None:
     """Flag a claim stronger than the report's details, or a played-down repair-first fault."""
     if facts.claim_mismatch is None:
         return None
-    claim, detail = _quote(facts, "mismatch_claim"), _quote(facts, "mismatch_detail")
+    claim, detail = _quote(facts, "mismatch_claim", unverified), _quote(facts, "mismatch_detail", unverified)
     if facts.claim_mismatch == "over":
         return f"Claim stronger than the report's own details: '{claim}' vs '{detail}' — check before acting"
     # §3.2.2 Field 8: the model never sees tiers, so code keeps "under" for dangerous-tier faults only.
@@ -217,6 +224,6 @@ def evaluate(facts: ExtractedFacts, unverified: Unverified) -> Evaluation:
     tier = lookup_tier(facts.taxonomy_match)
     tally = compute_tally(tier, facts, unverified)
     safety = compute_safety(facts, unverified)
-    candidates = (*safety.flags, tier.flag, *tally.flags, mismatch_flag(facts, tier), unverified_flag(facts, unverified))
+    candidates = (*safety.flags, tier.flag, *tally.flags, mismatch_flag(facts, tier, unverified), unverified_flag(facts, unverified))
     flags = tuple(dict.fromkeys(f for f in candidates if f is not None))
     return Evaluation(tier=tier, tally=tally, safety=safety, flags=flags)

@@ -359,27 +359,27 @@ def assert_quotes_in(flag: str | None, *quotes: str) -> None:
 
 
 def test_over_on_standard_tier_flags() -> None:
-    flag = mismatch_flag(facts([TAP], mismatch=OVER), lookup_tier([TAP]))
+    flag = mismatch_flag(facts([TAP], mismatch=OVER), lookup_tier([TAP]), frozenset())
     assert flag is not None and flag.startswith("Claim stronger than the report's own details")
     assert_quotes_in(flag, OVER[1], OVER[2])
 
 
 def test_under_on_dangerous_tier_flags() -> None:
-    flag = mismatch_flag(facts([SEWAGE], mismatch=UNDER), lookup_tier([SEWAGE]))
+    flag = mismatch_flag(facts([SEWAGE], mismatch=UNDER), lookup_tier([SEWAGE]), frozenset())
     assert flag is not None and flag.startswith("Report plays down a fault on the repair-first list")
     assert_quotes_in(flag, UNDER[1], UNDER[2])
 
 
 def test_under_on_standard_tier_not_flagged() -> None:
-    assert mismatch_flag(facts([TAP], mismatch=UNDER), lookup_tier([TAP])) is None
+    assert mismatch_flag(facts([TAP], mismatch=UNDER), lookup_tier([TAP]), frozenset()) is None
 
 
 def test_under_with_no_tier_not_flagged() -> None:
-    assert mismatch_flag(facts([], mismatch=UNDER), lookup_tier([])) is None
+    assert mismatch_flag(facts([], mismatch=UNDER), lookup_tier([]), frozenset()) is None
 
 
 def test_no_mismatch_not_flagged() -> None:
-    assert mismatch_flag(facts([SEWAGE]), lookup_tier([SEWAGE])) is None
+    assert mismatch_flag(facts([SEWAGE]), lookup_tier([SEWAGE]), frozenset()) is None
 
 
 def test_one_unverified_span_flagged_with_its_quote() -> None:
@@ -427,7 +427,7 @@ def test_played_down_toilet_keeps_4_and_flags() -> None:
     mismatch = ("under", "nothing too bad", "toilet's blocked")
     result = evaluate(facts([TOILET], mismatch=mismatch, fault="toilet's blocked"), frozenset())
     assert result.tally.tally == 4
-    assert result.flags == (mismatch_flag(facts([TOILET], mismatch=mismatch), lookup_tier([TOILET])),)
+    assert result.flags == (mismatch_flag(facts([TOILET], mismatch=mismatch), lookup_tier([TOILET]), frozenset()),)
 
 
 def test_overclaimed_tap_scores_2_with_flag_and_no_safety() -> None:
@@ -520,3 +520,42 @@ def test_tally_names_the_winning_entry(names: list[str], winner: str | None) -> 
 def test_tally_without_winner_rejected() -> None:
     with pytest.raises(ValueError, match="name the fault"):
         TallyResult(tally=4, base=3, bump=1, winner=None, reasons=(), flags=())
+
+
+# --- quote choice: a verified quote is preferred (review fix) ---------------------
+
+SPARKS = "sparks shooting out"  # the unverified one
+
+
+def with_extra_span(f: ExtractedFacts, field: str, text: str) -> ExtractedFacts:
+    data = f.model_dump()
+    data["quoted_spans"].append({"field": field, "text": text})
+    return ExtractedFacts.model_validate(data)
+
+
+def test_reason_quotes_the_verified_hazard_and_no_hazard_flag() -> None:
+    f = with_extra_span(facts([], hazard=("described", "active", SPARKS), fault="power"), "hazard", "water in the light")
+    unverified = frozenset({("hazard", SPARKS)})
+    safety = compute_safety(f, unverified)
+    assert safety.reason == "Active hazard described: 'water in the light' — full override"
+    assert UNVERIFIED_HAZARD not in safety.flags
+    assert unverified_flag(f, unverified) == f"Quoted words not found in the report: '{SPARKS}' — check the reading"
+
+
+def test_hazard_flag_still_fires_when_no_hazard_quote_is_verified() -> None:
+    f = with_extra_span(facts([], hazard=("described", "active", SPARKS)), "hazard", "water in the light")
+    safety = compute_safety(f, frozenset({("hazard", SPARKS), ("hazard", "water in the light")}))
+    assert (safety.level, safety.flags) == (2, (UNVERIFIED_HAZARD,))
+    assert f"'{SPARKS}'" in safety.reason  # nothing verified: fall back to the first quote
+
+
+def test_g5_flag_quotes_the_verified_harm() -> None:
+    f = with_extra_span(facts([TAP], harm="gonna blow up"), "harm_claimed", ELECTROCUTE)
+    (flag,) = compute_safety(f, frozenset({("harm_claimed", "gonna blow up")})).flags
+    assert f"'{ELECTROCUTE}'" in flag and "blow up" not in flag
+
+
+def test_mismatch_flag_quotes_the_verified_claim() -> None:
+    f = with_extra_span(facts([TAP], mismatch=OVER), "mismatch_claim", "worst leak ever")
+    flag = mismatch_flag(f, lookup_tier([TAP]), frozenset({("mismatch_claim", OVER[1])}))
+    assert flag is not None and "'worst leak ever'" in flag and OVER[1] not in flag

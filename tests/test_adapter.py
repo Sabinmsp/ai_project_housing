@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from triage.adapter import to_rank_input
 from triage.evaluation import NO_ALTERNATIVE, NO_HAZARD
-from triage.models import EnrichedJob
+from triage.models import EnrichedJob, VerifiedSpan
 from triage.ranking import rank
 
 MON = datetime(2026, 9, 28, 9, 0, tzinfo=timezone(timedelta(hours=9, minutes=30)))
@@ -131,3 +131,28 @@ def test_tier_entry_must_back_the_stated_tier() -> None:
         enriched(tier_entry="gas leak")  # a dangerous entry on a standard job
     with pytest.raises(ValidationError, match="tier_entry"):
         enriched(tier_entry="serious roof leak")  # not a table name
+
+
+# --- review fixes: consistency, frozen, strict spans -------------------------------
+
+
+def test_dangerous_tier_without_tally_rejected() -> None:
+    untiered = {"base_points": None, "severity_bump": None, "urgency_tally": None, "tally_reasons": ()}
+    with pytest.raises(ValidationError, match="must be None when urgency_tally is None"):
+        enriched(**untiered, tier="dangerous", tier_entry=None)
+
+
+def test_enriched_job_assignment_raises() -> None:
+    job = enriched()
+    with pytest.raises(ValidationError):
+        job.urgency_tally = None  # type: ignore[misc]
+
+
+def test_verified_span_is_frozen_and_strict() -> None:
+    span = VerifiedSpan(field="hazard", text="sparks", verified=False)
+    with pytest.raises(ValidationError):
+        span.verified = True  # type: ignore[misc]
+    with pytest.raises(ValidationError):
+        VerifiedSpan(field="hazard", text="sparks", verified=True, bogus=1)  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        VerifiedSpan(field="not_a_span_field", text="sparks", verified=True)  # type: ignore[arg-type]

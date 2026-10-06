@@ -216,7 +216,9 @@ class ExtractionResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 class VerifiedSpan(BaseModel):
-    field: str
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    field: SpanField
     text: str
     verified: bool
 
@@ -224,7 +226,8 @@ class VerifiedSpan(BaseModel):
 class EnrichedJob(BaseModel):
     """Output of Stage 5. Stage 6 reads only three of these fields for order."""
 
-    model_config = ConfigDict(extra="forbid")
+    # frozen: assignment would skip _consistent, so a scored job could lose its tally unchecked.
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     request_id: str
     community: str
@@ -262,8 +265,9 @@ class EnrichedJob(BaseModel):
         if self.safety_flag != (self.safety_level == "active"):
             raise ValueError(f"safety_flag={self.safety_flag} disagrees with safety_level={self.safety_level!r}")
         if self.urgency_tally is None:
-            if self.base_points is not None or self.severity_bump is not None or self.tier_entry is not None:
-                raise ValueError("base_points, severity_bump and tier_entry must be None when urgency_tally is None")
+            # A tier with no tally would be held in the review band or crash the coordinator view.
+            if any(v is not None for v in (self.tier, self.tier_entry, self.base_points, self.severity_bump)):
+                raise ValueError("tier, tier_entry, base_points and severity_bump must be None when urgency_tally is None")
             return self
         # The coordinator's tier line cites this entry's sources, so it must back the stated tier.
         if self.tier_entry not in TIER_TABLE or TIER_TABLE[self.tier_entry].tier != self.tier:
