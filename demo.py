@@ -11,33 +11,25 @@ import os
 import sys
 from pathlib import Path
 
-from triage.extraction import default_client, extract
+from triage.extraction import OfflineExtractor, default_client, extract
 from triage.intake import DuplicateRequestError, SQLiteReportRepository
 from triage.models import EnrichedJob, ExtractionStatus, VerifiedSpan
 from triage.adapter import to_rank_input
 from triage.explain import build_traces, render_coordinator, render_review_entry, render_tenant_sms
 from triage.ranking import rank
 from triage.report_files import load_reports
+from triage.tiers import TIER_TABLE
 
 REPORTS_DIR = Path(__file__).with_name("reports")
 
 # ---- stand-ins for teammates' stages (NOT part of Stages 1, 2, 6) --------
-_STANDIN_TIERS = {
-    "blocked or broken toilet": "dangerous", "gas leak": "dangerous",
-    "electrical fault: sparking or exposed wires": "dangerous",
-    "serious roof leak": "dangerous", "no water supply": "dangerous",
-    "sewage overflow": "dangerous", "no power to the house": "dangerous",
-    "hot water system not working": "standard", "stove or cooktop not working": "standard",
-    "air conditioner not working": "standard", "broken window or glazing": "standard",
-    "broken external door lock": "standard",
-}
 _STANDIN_DISTANCE = {"Wadeye": 412, "Maningrida": 510, "Darwin": 0, "Galiwinku": 560}
 
 
 def _standin_stages_3_to_5(report, facts) -> EnrichedJob:
     spans = [VerifiedSpan(field=s.field, text=s.text, verified=s.text in report.raw_text)
              for s in facts.quoted_spans]
-    tiers = [_STANDIN_TIERS[m] for m in facts.taxonomy_match if m in _STANDIN_TIERS]
+    tiers = [TIER_TABLE[m].tier for m in facts.taxonomy_match if m in TIER_TABLE]
     common = dict(request_id=report.request_id, community=report.community,
                   original_report_timestamp=report.original_report_timestamp,
                   fault_description=facts.fault_description,
@@ -82,6 +74,9 @@ def main() -> None:
         sys.exit(f"Report folder not found: {folder}")
     repo = SQLiteReportRepository()
     client = default_client()
+    if isinstance(client, OfflineExtractor):
+        print("OFFLINE STAND-IN: regex test double, not the real extractor. "
+              "Dialect handling requires the LLM path (master §3.2.3).")
 
     # ---- STAGE 1: intake ---------------------------------------------------
     reports, skipped = load_reports(folder)

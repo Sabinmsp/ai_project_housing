@@ -21,7 +21,7 @@ def panel_d_job(**overrides: Any) -> EnrichedJob:
         "community": "Wadeye",
         "original_report_timestamp": datetime.fromtimestamp(1726041600, tz=timezone.utc),
         "fault_description": "roof leaking",
-        "taxonomy_match": ["serious roof leak"],
+        "taxonomy_match": ["roof leak"],
         "tier": "dangerous",
         "base_points": 3,
         "no_redundancy": 1,
@@ -58,13 +58,13 @@ def traces(*jobs: EnrichedJob) -> list[ReasoningTrace]:
 def test_panel_d_trace() -> None:
     (tr,) = traces(panel_d_job())
     assert tr.original_timestamp == datetime.fromtimestamp(1726041600, tz=timezone.utc)
-    assert tr.taxonomy_match == ("serious roof leak",)
+    assert tr.taxonomy_match == ("roof leak",)
     assert tr.defaults_applied == ("no-redundancy default applied: +1 (no alternative named)",)
     assert tr.safety_level == 2 and "active hazard" in tr.safety_reason
     assert [s.text for s in tr.evidence_spans] == ["water coming through the light fitting"]
     view = render_coordinator(tr)
     assert "412 km" in view and "not in sort_key" in view
-    assert "serious roof leak" in view and "2024-09-11" in view
+    assert "roof leak" in view and "2024-09-11" in view
     assert "made up" not in view  # unverified spans never reach an audience
 
 

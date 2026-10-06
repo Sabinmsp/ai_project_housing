@@ -1,18 +1,23 @@
+import ast
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
+from triage import extraction
 from triage.extraction import (
     FAULT_NAMES,
     SYSTEM_PROMPT,
     OfflineExtractor,
+    _FAULT_PATTERNS,
     build_user_prompt,
     extract,
     response_schema,
 )
 from triage.intake import create_report
 from triage.models import ExtractedFacts, ExtractionStatus
+from triage.tiers import TIER_TABLE
 
 T0 = datetime(2026, 9, 1, tzinfo=timezone.utc)
 
@@ -262,6 +267,8 @@ def test_no_fault_named_is_out_of_scope():
 
 
 def test_unknown_fault_gives_empty_match_but_is_not_out_of_scope():
+    # Documents an offline stand-in limit, not intended behaviour: the LLM path is
+    # expected to match "fan not working properly" here.
     text = "the ceiling fan wobbles a bit"
     res = extract(report(text), OfflineExtractor())
     assert res.facts.taxonomy_match == []
@@ -273,7 +280,7 @@ def test_active_hazard_detected():
     text = "roof leaking bad, water coming through the light fitting in kids room"
     f = extract(report(text), OfflineExtractor()).facts
     assert f.mechanism_type == "active"
-    assert "serious roof leak" in f.taxonomy_match
+    assert "roof leak" in f.taxonomy_match
 
 
 def test_conditional_hazard_detected():
@@ -292,3 +299,28 @@ def test_offline_spans_are_real_substrings():
 
 def test_fault_names_unique():
     assert len(FAULT_NAMES) == len(set(FAULT_NAMES))
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("stove element not working", ["stove element not working"]),
+    ("stove's not working", ["stove or oven not working"]),
+])
+def test_stove_element_is_not_the_stove(text, expected):
+    assert OfflineExtractor.read(text).taxonomy_match == expected
+
+
+def test_every_pattern_is_keyed_by_a_table_name():
+    assert set(_FAULT_PATTERNS) <= set(TIER_TABLE)
+
+
+def test_every_table_name_has_a_pattern():
+    assert set(TIER_TABLE) <= set(_FAULT_PATTERNS)
+
+
+def test_extraction_imports_only_fault_names_from_tiers():
+    """Invariant 1: the tier column never reaches the module that builds the prompt."""
+    tree = ast.parse(Path(extraction.__file__).read_text())
+    from_tiers = [alias.name for node in ast.walk(tree)
+                  if isinstance(node, ast.ImportFrom) and (node.module or "").endswith("tiers")
+                  for alias in node.names]
+    assert from_tiers == ["FAULT_NAMES"]

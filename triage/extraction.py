@@ -20,25 +20,8 @@ from .models import (
     QuotedSpan,
     Report,
 )
-
-# Names only. The tier column lives in Stage 4 and must never be imported here.
-FAULT_NAMES: list[str] = [
-    "blocked or broken toilet",
-    "burst water pipe or serious water leak",
-    "gas leak",
-    "electrical fault: sparking or exposed wires",
-    "no power to the house",
-    "no water supply",
-    "serious roof leak",
-    "flooding inside the house",
-    "hot water system not working",
-    "stove or cooktop not working",
-    "air conditioner not working",
-    "broken external door lock",
-    "broken window or glazing",
-    "storm or fire damage",
-    "sewage overflow",
-]
+# Invariant 1: import names only. TIER_TABLE carries tiers and must never be imported here.
+from .tiers import FAULT_NAMES
 
 SYSTEM_PROMPT = """You read housing maintenance reports from tenants in remote \
 Northern Territory communities. You answer reading questions about the text. \
@@ -72,7 +55,7 @@ empty taxonomy_match.
 """
 
 
-def build_user_prompt(raw_text: str, fault_names: list[str] = FAULT_NAMES) -> str:
+def build_user_prompt(raw_text: str, fault_names: tuple[str, ...] = FAULT_NAMES) -> str:
     faults = "\n".join(f"- {name}" for name in fault_names)
     return f"FAULT LIST:\n{faults}\n\nREPORT TEXT:\n<<<\n{raw_text}\n>>>"
 
@@ -151,7 +134,7 @@ def response_schema() -> dict:
     return tighten(ExtractedFacts.model_json_schema())
 
 
-def _parse(raw_json: str, fault_names: list[str]) -> ExtractedFacts:
+def _parse(raw_json: str, fault_names: tuple[str, ...]) -> ExtractedFacts:
     facts = ExtractedFacts.model_validate_json(raw_json)
     unknown = [m for m in facts.taxonomy_match if m not in fault_names]
     if unknown:
@@ -160,7 +143,7 @@ def _parse(raw_json: str, fault_names: list[str]) -> ExtractedFacts:
 
 
 def extract(report: Report, client: LLMClient,
-            fault_names: list[str] = FAULT_NAMES) -> ExtractionResult:
+            fault_names: tuple[str, ...] = FAULT_NAMES) -> ExtractionResult:
     """One model call, validated at the boundary. Retry once, then flag for a human."""
     schema = response_schema()
     user = build_user_prompt(report.raw_text, fault_names)
@@ -194,19 +177,22 @@ def extract(report: Report, client: LLMClient,
 
 _FAULT_PATTERNS: dict[str, str] = {
     "blocked or broken toilet": r"\b(toilet|dunny|loo)\b[^.\n]*?\b(blocked|broken|not flushing|overflow\w*)\b|\b(blocked|broken)\s+(toilet|dunny)\b",
-    "burst water pipe or serious water leak": r"\b(burst|busted)\s+pipe\b|\bpipe\b[^.\n]*\bburst\b|\bwater (is )?leaking\b",
+    "blocked drain": r"\bdrain\b[^.\n]*\bblocked\b|\bblocked drain\b",
+    "sewage leak": r"\bsewage\b|\bsewer\b",
+    "leaking or burst water main or pipe": r"\b(burst|busted)\s+pipe\b|\bpipe\b[^.\n]*\bburst\b|\bwater (is )?leaking\b",
+    "exposed electrical wires": r"\b(sparking|sparks|exposed wires?|electric shock|zapped)\b",
     "gas leak": r"\b(smell (of )?gas|gas leak)\b",
-    "electrical fault: sparking or exposed wires": r"\b(sparking|sparks|exposed wires?|electric shock|zapped)\b",
-    "no power to the house": r"\bno (power|electricity)\b|\bpower('s| is)? (off|out)\b",
-    "no water supply": r"\bno water\b",
-    "serious roof leak": r"\broof\b[^.\n]*\bleak\w*\b|\bleak\w*\b[^.\n]*\broof\b",
-    "flooding inside the house": r"\bflood\w*\b",
+    "roof leak": r"\broof\b[^.\n]*\bleak\w*\b|\bleak\w*\b[^.\n]*\broof\b",
+    "flooding or flood damage": r"\bflood\w*\b",
+    "storm, fire or impact damage": r"\b(storm|cyclone|fire)\b[^.\n]*\bdamage\w*\b",
+    "no gas, electricity or water supply": r"\bno (power|electricity|water|gas)\b|\bpower('s| is)? (off|out)\b",
     "hot water system not working": r"\bhot water\b[^.\n]*\b(not working|broken|gone|cold|no)\b|\bno hot water\b",
-    "stove or cooktop not working": r"\b(stove|cooktop|oven)\b[^.\n]*\b(not working|broken|dead)\b",
-    "air conditioner not working": r"\b(air ?con|aircon|a/c|cooler)\b[^.\n]*\b(not working|broken|dead)\b",
-    "broken external door lock": r"\b(front|back)?\s*door\b[^.\n]*\block\b[^.\n]*\b(broken|busted)\b|\bbroken (door )?lock\b",
-    "broken window or glazing": r"\b(window|glass)\b[^.\n]*\b(broken|smashed|cracked)\b|\b(broken|smashed|cracked)\s+(window|glass)\b",
-    "sewage overflow": r"\bsewage\b|\bsewer\b",
+    # Lookahead: "stove element" is its own standard entry (nt.gov.au), not the stove itself.
+    "stove or oven not working": r"\b(stove|cooktop|oven)\b(?![^.\n]*\belements?\b)[^.\n]*\b(not working|broken|dead)\b",
+    "dripping tap or tap tight to turn": r"\btaps?\b[^.\n]*\b(dripping|drips|tight|stiff)\b|\bdripping taps?\b",
+    "stove element not working": r"\belements?\b[^.\n]*\b(not working|broken|dead)\b",
+    "fan not working properly": r"\bfan\b[^.\n]*\b(not working|broken|dead)\b",
+    "power point not working": r"\bpower ?points?\b[^.\n]*\b(not working|broken|dead)\b",
 }
 _ALTERNATIVE = r"\busing the other (one|toilet|shower|bathroom)\b|\bother (toilet|shower|bathroom) (works|is working|still works)\b"
 _COPING = r"\b(bucket|neighbou?r'?s|the servo|servo|the shop|the clinic|family'?s place)\b"
