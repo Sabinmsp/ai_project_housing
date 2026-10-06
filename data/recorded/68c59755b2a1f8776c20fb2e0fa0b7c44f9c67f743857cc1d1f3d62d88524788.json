@@ -1,6 +1,6 @@
 {
   "model": "gpt-4o",
   "recorded_at": "2026-10-06",
-  "prompt_hash": "ffec9b821730ef9c50e79b016a06a204ef82afaa59d955992ae126696c363c38",
+  "prompt_hash": "d619bcdcd149f269f087c3b0ec02178d8f825135b6f4ea60fe180bebd36069de",
   "response": "{\"faults\":[{\"fault_description\":\"no hot water since last week\",\"taxonomy_match\":[\"hot water system not working\"],\"alternative_mentioned\":false,\"coping_mentioned\":false,\"impact_status\":\"ongoing\",\"hazard_status\":\"none\",\"mechanism_type\":null,\"harm_claimed\":false,\"fault_or_sign\":\"fault\",\"claim_mismatch\":null,\"worsening_mentioned\":false,\"quoted_spans\":[{\"field\":\"fault_description\",\"text\":\"no hot water since last week\"},{\"field\":\"taxonomy_match\",\"text\":\"no hot water since last week\"},{\"field\":\"impact_status\",\"text\":\"ongoing\"}]}]}"
 }
