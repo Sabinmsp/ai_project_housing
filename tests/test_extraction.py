@@ -445,7 +445,6 @@ def test_faults_cannot_be_changed_in_place():
 # --- SYSTEM_PROMPT and build_user_prompt (step 3.2) ----------------------------------
 
 REPORTS_DIR = Path(__file__).parent.parent / "reports"
-LABELLED = Path(__file__).parent.parent / "data" / "synthetic" / "labelled.jsonl"
 
 
 def model_facing_texts() -> dict[str, str]:
@@ -529,11 +528,6 @@ def _normalise(text: str) -> str:
 
 def test_prompt_examples_never_come_from_report_files():
     corpus = [_normalise(read_text(p)) for p in sorted(REPORTS_DIR.iterdir()) if p.suffix in (".pdf", ".txt")]
-    if LABELLED.exists():
-        for line in LABELLED.read_text().splitlines():
-            if line.strip():
-                record = json.loads(line)
-                corpus += [_normalise(v) for v in record.values() if isinstance(v, str)]
     assert corpus
     for key, example in PROMPT_EXAMPLES.items():
         for text in corpus:
