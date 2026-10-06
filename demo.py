@@ -14,7 +14,9 @@ from pathlib import Path
 from triage.extraction import default_client, extract
 from triage.intake import DuplicateRequestError, SQLiteReportRepository
 from triage.models import EnrichedJob, ExtractionStatus, VerifiedSpan
-from triage.ranking import rank, render_coordinator, render_tenant_sms
+from triage.adapter import to_rank_input
+from triage.explain import build_traces, render_coordinator, render_review_entry, render_tenant_sms
+from triage.ranking import rank
 from triage.report_files import load_reports
 
 REPORTS_DIR = Path(__file__).with_name("reports")
@@ -137,15 +139,17 @@ def main() -> None:
     _heading("STAGES 3-5 - teammates' stages (placeholders here, output not shown)")
 
     # ---- STAGE 6: ranking + why-trace -------------------------------------
-    result = rank(jobs)
+    by_id = {job.request_id: job for job in jobs}
+    result = rank([to_rank_input(job) for job in jobs])
     _heading("STAGE 6 - RANKING + WHY-TRACE (code)")
     print("\nREVIEW BAND (held above and outside the sort)")
-    for e in result.review_band:
-        print(f"  {e.request_id}  {e.community}  {e.fault_description!r}{origin(e.request_id)}")
+    for job_id in result.review_band:
+        print(f"\n{job_id}{origin(job_id)}")
+        print(render_review_entry(by_id[job_id]))
 
-    print(f"\nRANKED QUEUE  sort_key = (safety_flag, urgency_tally, -original_timestamp)")
-    for tr in result.traces:
-        print(f"\n#{tr.position}{origin(tr.request_id)}")
+    print("\nRANKED QUEUE  sort_key = (-safety_level, tally-less first, -tally, original_timestamp, job_id)")
+    for tr in build_traces(result, by_id):
+        print(f"\n#{tr.position}{origin(tr.job_id)}")
         print(render_coordinator(tr))
         print("SMS:", render_tenant_sms(tr))
 
