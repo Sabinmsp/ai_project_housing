@@ -15,6 +15,8 @@ from triage.evaluation import (
     UNCLEAR_HAZARD,
     UNVERIFIED_HAZARD,
     TallyResult,
+    Unverified,
+    evaluate,
     compute_safety,
     compute_tally,
     mismatch_flag,
@@ -123,6 +125,7 @@ def facts(
     hazard: Hazard = None,
     harm: str | None = None,  # harm quote
     mismatch: tuple[str, str, str] | None = None,  # (direction, claim quote, detail quote)
+    fault: str | None = None,
 ) -> ExtractedFacts:
     spans = [{"field": "taxonomy_match", "text": "quoted"}] if names else []
     spans += [{"field": f, "text": "quoted"} for f, on in
@@ -132,9 +135,12 @@ def facts(
         spans.append({"field": "hazard", "text": hazard_quote})
     if harm:
         spans.append({"field": "harm_claimed", "text": harm})
+    if fault:
+        spans.append({"field": "fault_description", "text": fault})
     if mismatch:
         spans += [{"field": "mismatch_claim", "text": mismatch[1]}, {"field": "mismatch_detail", "text": mismatch[2]}]
     return ExtractedFacts.model_validate({
+        "fault_description": fault,
         "taxonomy_match": names,
         "alternative_mentioned": alternative,
         "coping_mentioned": coping,
@@ -148,7 +154,7 @@ def facts(
     })
 
 
-def tally(names: list[str], unverified: frozenset[str] = frozenset(), **kw: bool) -> TallyResult:
+def tally(names: list[str], unverified: Unverified = frozenset(), **kw: bool) -> TallyResult:
     return compute_tally(lookup_tier(names), facts(names, **kw), unverified)
 
 
@@ -182,12 +188,12 @@ def test_verified_sign_scores_3() -> None:
 
 
 def test_unverified_alternative_keeps_4_and_flags() -> None:
-    result = tally([TOILET], frozenset({"alternative_mentioned"}), alternative=True)
+    result = tally([TOILET], frozenset({("alternative_mentioned", "quoted")}), alternative=True)
     assert (result.tally, result.flags) == (4, (UNVERIFIED_ALTERNATIVE,))
 
 
 def test_unverified_sign_keeps_4_and_flags() -> None:
-    result = tally([SEWAGE], frozenset({"fault_or_sign"}), sign=True)
+    result = tally([SEWAGE], frozenset({("fault_or_sign", "quoted")}), sign=True)
     assert (result.tally, result.flags) == (4, (UNVERIFIED_SIGN,))
 
 
@@ -203,25 +209,27 @@ def test_ambiguous_tap_and_element_takes_max() -> None:
 
 def test_unverified_claim_on_degraded_fault_not_flagged() -> None:
     # The tap scores +0 by definition, so "+1 kept" would be false.
-    result = tally([TAP], frozenset({"alternative_mentioned"}), alternative=True)
+    result = tally([TAP], frozenset({("alternative_mentioned", "quoted")}), alternative=True)
     assert (result.tally, result.flags) == (2, ())
 
 
 # --- compute_tally: properties ----------------------------------------------
 
-unverified_sets = st.frozensets(st.sampled_from(SPAN_FIELDS))
+# compute_tally and compute_safety only read the field, so a placeholder quote is enough.
+tally_pairs = st.sampled_from(SPAN_FIELDS).map(lambda f: (f, "quoted"))
+unverified_sets = st.frozensets(tally_pairs)
 
 
 @given(matches, st.booleans(), st.booleans(), unverified_sets)
-def test_coping_never_changes_result(match: list[str], alternative: bool, sign: bool, unverified: frozenset[str]) -> None:
+def test_coping_never_changes_result(match: list[str], alternative: bool, sign: bool, unverified: Unverified) -> None:
     names = list(dict.fromkeys(match))
     with_coping = tally(names, unverified, alternative=alternative, sign=sign, coping=True)
     assert with_coping == tally(names, unverified, alternative=alternative, sign=sign, coping=False)
 
 
-@given(matches, st.booleans(), st.booleans(), unverified_sets, st.sampled_from(SPAN_FIELDS))
+@given(matches, st.booleans(), st.booleans(), unverified_sets, tally_pairs)
 def test_more_unverified_never_lowers_tally(
-    match: list[str], alternative: bool, sign: bool, unverified: frozenset[str], extra: str
+    match: list[str], alternative: bool, sign: bool, unverified: Unverified, extra: tuple[str, str]
 ) -> None:
     names = list(dict.fromkeys(match))
     before = tally(names, unverified, alternative=alternative, sign=sign).tally
@@ -231,7 +239,7 @@ def test_more_unverified_never_lowers_tally(
 
 @given(matches, st.booleans(), st.booleans(), st.booleans(), unverified_sets)
 def test_tally_in_range_whenever_tier_set(
-    match: list[str], alternative: bool, sign: bool, coping: bool, unverified: frozenset[str]
+    match: list[str], alternative: bool, sign: bool, coping: bool, unverified: Unverified
 ) -> None:
     names = list(dict.fromkeys(match))
     result = tally(names, unverified, alternative=alternative, sign=sign, coping=coping)
@@ -295,12 +303,12 @@ def test_described_with_harm_has_no_g5_flag() -> None:
 
 
 def test_unverified_hazard_keeps_level_and_flags() -> None:
-    result = compute_safety(facts([], hazard=("described", "active", LIGHT)), frozenset({"hazard"}))
+    result = compute_safety(facts([], hazard=("described", "active", LIGHT)), frozenset({("hazard", LIGHT)}))
     assert (result.level, result.flags) == (2, (UNVERIFIED_HAZARD,))
 
 
 def test_unverified_harm_still_fires_g5() -> None:
-    result = compute_safety(facts([TAP], harm=ELECTROCUTE), frozenset({"harm_claimed"}))
+    result = compute_safety(facts([TAP], harm=ELECTROCUTE), frozenset({("harm_claimed", ELECTROCUTE)}))
     assert result.level == 0 and len(result.flags) == 1
 
 
@@ -309,27 +317,28 @@ def test_unverified_harm_still_fires_g5() -> None:
 hazards = st.sampled_from([None, ("described", "active", LIGHT), ("described", "conditional", WIRE),
                            ("unclear", None, CEILING)])
 harms = st.sampled_from([None, ELECTROCUTE])
-safety_unverified = st.frozensets(st.sampled_from(["hazard", "harm_claimed", "taxonomy_match"]))
+safety_pairs = st.sampled_from(["hazard", "harm_claimed", "taxonomy_match"]).map(lambda f: (f, "quoted"))
+safety_unverified = st.frozensets(safety_pairs)
 
 
 @given(matches, hazards, harms, safety_unverified)
-def test_safety_independent_of_taxonomy_match(match: list[str], hazard: Hazard, harm: str | None, unverified: frozenset[str]) -> None:
+def test_safety_independent_of_taxonomy_match(match: list[str], hazard: Hazard, harm: str | None, unverified: Unverified) -> None:
     names = list(dict.fromkeys(match))
     assert compute_safety(facts(names, hazard=hazard, harm=harm), unverified) == compute_safety(
         facts([], hazard=hazard, harm=harm), unverified
     )
 
 
-@given(hazards, harms, safety_unverified, st.sampled_from(["hazard", "harm_claimed", "taxonomy_match"]))
+@given(hazards, harms, safety_unverified, safety_pairs)
 def test_more_unverified_never_lowers_level(
-    hazard: Hazard, harm: str | None, unverified: frozenset[str], extra: str
+    hazard: Hazard, harm: str | None, unverified: Unverified, extra: tuple[str, str]
 ) -> None:
     f = facts([], hazard=hazard, harm=harm)
     assert compute_safety(f, unverified | {extra}).level >= compute_safety(f, unverified).level
 
 
 @given(hazards, harms, safety_unverified)
-def test_level_2_iff_described_active(hazard: Hazard, harm: str | None, unverified: frozenset[str]) -> None:
+def test_level_2_iff_described_active(hazard: Hazard, harm: str | None, unverified: Unverified) -> None:
     f = facts([], hazard=hazard, harm=harm)
     is_active = f.hazard_status == "described" and f.mechanism_type == "active"
     assert (compute_safety(f, unverified).level == 2) == is_active
@@ -373,16 +382,106 @@ def test_no_mismatch_not_flagged() -> None:
 
 def test_one_unverified_span_flagged_with_its_quote() -> None:
     f = facts([], hazard=("described", "active", LIGHT), harm=ELECTROCUTE)
-    flag = unverified_flag(f, frozenset({"hazard"}))
+    flag = unverified_flag(f, frozenset({("hazard", LIGHT)}))
     assert flag == f"Quoted words not found in the report: '{LIGHT}' — check the reading"
 
 
 def test_two_unverified_spans_give_one_flag_listing_both() -> None:
     f = facts([], hazard=("described", "active", LIGHT), harm=ELECTROCUTE)
-    flag = unverified_flag(f, frozenset({"harm_claimed", "hazard"}))
+    flag = unverified_flag(f, frozenset({("harm_claimed", ELECTROCUTE), ("hazard", LIGHT)}))
     assert flag == f"Quoted words not found in the report: '{LIGHT}', '{ELECTROCUTE}' — check the reading"
 
 
 def test_nothing_unverified_not_flagged() -> None:
     f = facts([], hazard=("described", "active", LIGHT), harm=ELECTROCUTE)
     assert unverified_flag(f, frozenset()) is None
+
+
+
+def test_only_the_failed_quote_of_a_field_is_listed() -> None:
+    data = facts([], hazard=("described", "active", LIGHT)).model_dump()
+    data["quoted_spans"].append({"field": "hazard", "text": "wires sparking"})
+    f = ExtractedFacts.model_validate(data)
+    flag = unverified_flag(f, frozenset({("hazard", "wires sparking")}))
+    assert flag == "Quoted words not found in the report: 'wires sparking' — check the reading"
+
+
+# --- evaluate: worked examples from the grounds docs ------------------------------
+
+
+def test_roof_collapse_untiered_but_active() -> None:
+    quote = "ceiling's come down on the bed"
+    result = evaluate(facts([], hazard=("described", "active", quote), fault="roof collapse"), frozenset())
+    assert (result.tier.tier, result.tally.tally, result.safety.level) == (None, None, 2)
+
+
+def test_g2_founding_pair_sign_3_fault_4() -> None:
+    smell = evaluate(facts([SEWAGE], sign=True, fault="sewage smell, 2 days"), frozenset())
+    blocked = evaluate(facts([TOILET], fault="toilet fully blocked, only toilet"), frozenset())
+    assert (smell.tally.tally, blocked.tally.tally) == (3, 4)
+
+
+def test_played_down_toilet_keeps_4_and_flags() -> None:
+    mismatch = ("under", "nothing too bad", "toilet's blocked")
+    result = evaluate(facts([TOILET], mismatch=mismatch, fault="toilet's blocked"), frozenset())
+    assert result.tally.tally == 4
+    assert result.flags == (mismatch_flag(facts([TOILET], mismatch=mismatch), lookup_tier([TOILET])),)
+
+
+def test_overclaimed_tap_scores_2_with_flag_and_no_safety() -> None:
+    # "can't cope" is distress: not interpreted, only routed to a human via the flag.
+    mismatch = ("over", "most urgent thing, can't cope", "tap's dripping")
+    result = evaluate(facts([TAP], mismatch=mismatch, fault="tap's dripping"), frozenset())
+    assert (result.tally.tally, result.safety.level) == (2, 0)
+    assert len(result.flags) == 1 and result.flags[0].startswith("Claim stronger than")
+
+
+def test_electrocute_claim_is_level_0_with_g5_flag() -> None:
+    result = evaluate(facts([TAP], harm=ELECTROCUTE, fault="tap"), frozenset())
+    assert result.safety.level == 0
+    assert len(result.flags) == 1 and "Safety claim — unconfirmed" in result.flags[0]
+
+
+def test_ambiguous_drain_or_sewage_is_dangerous_and_flagged() -> None:
+    result = evaluate(facts([DRAIN, SEWAGE], fault="could be blocked drain or sewage leak"), frozenset())
+    assert result.tier.tier == "dangerous"
+    assert result.flags == (lookup_tier([DRAIN, SEWAGE]).flag,)
+
+
+def test_no_fault_named_raises() -> None:
+    with pytest.raises(ValueError, match="no fault named"):
+        evaluate(facts([]), frozenset())
+
+
+def test_unverified_pair_not_in_report_raises() -> None:
+    with pytest.raises(ValueError, match="not quoted spans"):
+        evaluate(facts([TOILET], fault="toilet"), frozenset({("hazard", "made up")}))
+
+
+def test_flags_ordered_safety_ambiguity_tally_mismatch_unverified() -> None:
+    mismatch = ("over", "flooding everywhere", "small drip")
+    f = facts([TOILET, DRAIN], alternative=True, hazard=("unclear", None, CEILING), mismatch=mismatch, fault="toilet")
+    result = evaluate(f, frozenset({("alternative_mentioned", "quoted")}))
+    safety, ambiguity, tally_flag, mismatch_text, unverified_text = result.flags
+    assert safety.startswith("Possible hazard")
+    assert ambiguity.startswith("Fault type unclear")
+    assert tally_flag == UNVERIFIED_ALTERNATIVE
+    assert mismatch_text.startswith("Claim stronger than")
+    assert unverified_text.startswith("Quoted words not found")
+
+
+@given(
+    matches, hazards, harms, st.booleans(), st.booleans(),
+    st.sampled_from([None, OVER, UNDER]), st.data(),
+)
+def test_evaluate_flags_never_blank_or_duplicated(
+    match: list[str], hazard: Hazard, harm: str | None, alternative: bool, sign: bool,
+    mismatch: tuple[str, str, str] | None, data: st.DataObject,
+) -> None:
+    names = list(dict.fromkeys(match))
+    f = facts(names, alternative=alternative, sign=sign, hazard=hazard, harm=harm, mismatch=mismatch, fault="fault")
+    pairs = sorted({(s.field, s.text) for s in f.quoted_spans})
+    unverified = data.draw(st.frozensets(st.sampled_from(pairs)))
+    flags = evaluate(f, unverified).flags
+    assert all(flag.strip() for flag in flags)
+    assert len(flags) == len(set(flags))

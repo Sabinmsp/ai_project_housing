@@ -12,6 +12,8 @@ from triage.models import ExtractedFacts, Reason
 from triage.tiers import TIER_TABLE, FaultEntry
 
 _TIER_ORDER = {"standard": 0, "dangerous": 1}
+# (field, quote text) pairs whose quote was not found in the report.
+Unverified = frozenset[tuple[str, str]]
 # §4.2 tier mapping.
 _BASE_POINTS = {"dangerous": 3, "standard": 2}
 
@@ -60,14 +62,15 @@ class TallyResult(BaseModel):
     flags: tuple[Reason, ...]
 
 
-def compute_tally(tier: TierResult, facts: ExtractedFacts, unverified: frozenset[str]) -> TallyResult:
+def compute_tally(tier: TierResult, facts: ExtractedFacts, unverified: Unverified) -> TallyResult:
     """Base points for the tier plus the +1 bump, taking the highest-scoring candidate fault."""
     if tier.tier is None:
         return TallyResult(tally=None, reasons=(), flags=())
 
     # D1 (invariant 8): an unverified span never lowers a score, so its claim is ignored.
-    alternative = facts.alternative_mentioned and "alternative_mentioned" not in unverified
-    sign = facts.fault_or_sign == "sign" and "fault_or_sign" not in unverified
+    failed = {field for field, _ in unverified}
+    alternative = facts.alternative_mentioned and "alternative_mentioned" not in failed
+    sign = facts.fault_or_sign == "sign" and "fault_or_sign" not in failed
 
     def score(entry: FaultEntry) -> tuple[int, tuple[str, ...]]:
         zero_reasons = []
@@ -115,7 +118,7 @@ def _quote(facts: ExtractedFacts, field: str) -> str:
     return next(s.text for s in facts.quoted_spans if s.field == field)
 
 
-def compute_safety(facts: ExtractedFacts, unverified: frozenset[str]) -> SafetyResult:
+def compute_safety(facts: ExtractedFacts, unverified: Unverified) -> SafetyResult:
     """Safety level 0-2 from the hazard reading, plus flags for unclear or claimed-only harm."""
     # §4.4, Safety G1: safety is independent of tier, so taxonomy_match is never read.
     flags: list[str] = []
@@ -143,7 +146,7 @@ def compute_safety(facts: ExtractedFacts, unverified: frozenset[str]) -> SafetyR
                 f"Safety claim — unconfirmed: '{_quote(facts, 'harm_claimed')}' — fast human check, no override"
             )
     # D1 (invariant 8): an unverified hazard quote never lowers the level; a human checks it.
-    if level > 0 and "hazard" in unverified:
+    if level > 0 and any(field == "hazard" for field, _ in unverified):
         flags.append(UNVERIFIED_HAZARD)
     return SafetyResult(level=level, reason=reason, flags=tuple(flags))
 
@@ -164,11 +167,39 @@ def mismatch_flag(facts: ExtractedFacts, tier: TierResult) -> Reason | None:
     return None
 
 
-def unverified_flag(facts: ExtractedFacts, unverified: frozenset[str]) -> Reason | None:
+def unverified_flag(facts: ExtractedFacts, unverified: Unverified) -> Reason | None:
     """Flag every quote whose field failed verification, even when no score moved."""
     # §3.2.5: a fabricated quote means the extraction itself is unreliable.
-    quotes = dict.fromkeys(s.text for s in facts.quoted_spans if s.field in unverified)  # dedupe, keep order
+    # Exact pairs, so a verified quote in the same field is never listed. Dedupe, keep span order.
+    quotes = dict.fromkeys(s.text for s in facts.quoted_spans if (s.field, s.text) in unverified)
     if not quotes:
         return None
     listed = ", ".join(f"'{q}'" for q in quotes)
     return f"Quoted words not found in the report: {listed} — check the reading"
+
+
+class Evaluation(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    tier: TierResult
+    tally: TallyResult
+    safety: SafetyResult
+    # Deduped, in order: safety, ambiguity, tally, mismatch, unverified.
+    flags: tuple[Reason, ...]
+
+
+def evaluate(facts: ExtractedFacts, unverified: Unverified) -> Evaluation:
+    """Tier, tally, safety and every flag for one report's extracted facts."""
+    # D4: evaluation must never score a report that names no fault.
+    if not facts.fault_description:
+        raise ValueError("no fault named — out of scope, route to coordinator contact (master §3.2.4)")
+    spans = {(s.field, s.text) for s in facts.quoted_spans}
+    if not unverified <= spans:
+        raise ValueError(f"unverified pairs are not quoted spans of this report: {sorted(unverified - spans)}")
+
+    tier = lookup_tier(facts.taxonomy_match)
+    tally = compute_tally(tier, facts, unverified)
+    safety = compute_safety(facts, unverified)
+    candidates = (*safety.flags, tier.flag, *tally.flags, mismatch_flag(facts, tier), unverified_flag(facts, unverified))
+    flags = tuple(dict.fromkeys(f for f in candidates if f is not None))
+    return Evaluation(tier=tier, tally=tally, safety=safety, flags=flags)
