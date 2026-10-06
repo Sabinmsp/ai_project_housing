@@ -135,6 +135,8 @@ def facts(
         spans.append({"field": "hazard", "text": hazard_quote})
     if harm:
         spans.append({"field": "harm_claimed", "text": harm})
+    # ExtractedFacts rejects a taxonomy match with no fault named, so supply a placeholder.
+    fault = fault or ("quoted" if names else None)
     if fault:
         spans.append({"field": "fault_description", "text": fault})
     if mismatch:
@@ -485,3 +487,26 @@ def test_evaluate_flags_never_blank_or_duplicated(
     flags = evaluate(f, unverified).flags
     assert all(flag.strip() for flag in flags)
     assert len(flags) == len(set(flags))
+
+
+
+@pytest.mark.parametrize("names, kw, expected", [
+    ([TOILET], {}, (3, 1)),
+    ([TOILET], {"alternative": True}, (3, 0)),
+    ([TAP], {}, (2, 0)),
+    ([TAP, ELEMENT], {}, (2, 1)),
+    ([], {}, (None, None)),
+])
+def test_tally_reports_base_and_bump(names: list[str], kw: dict[str, bool], expected: tuple[int | None, int | None]) -> None:
+    result = tally(names, **kw)
+    assert (result.base, result.bump) == expected
+
+
+@pytest.mark.parametrize("fields", [
+    {"tally": 4, "base": 3, "bump": 0},
+    {"tally": 4, "base": None, "bump": 1},
+    {"tally": None, "base": 3, "bump": None},
+])
+def test_tally_result_parts_must_add_up(fields: dict[str, int | None]) -> None:
+    with pytest.raises(ValueError):
+        TallyResult(**fields, reasons=(), flags=())

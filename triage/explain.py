@@ -8,11 +8,6 @@ from triage.models import EnrichedJob, RankedJob, RankResult, Reason, VerifiedSp
 from triage.ranking import REVIEW_BAND_REASON
 
 TIER_SOURCE = "NT Government published fault list"
-SAFETY_REASONS = {
-    2: "safety level 2: active hazard, full override",
-    1: "safety level 1: conditional hazard, elevated, check-in window applies",
-    0: "safety level 0: no hazard mechanism described",
-}
 
 
 class ReasoningTrace(BaseModel):
@@ -26,12 +21,11 @@ class ReasoningTrace(BaseModel):
     # None: untiered safety job, ranked but awaiting a tier call (invariant 6).
     tier: Literal["dangerous", "standard"] | None
     base_points: int | None
-    no_redundancy: int
-    no_redundancy_reason: str
-    defaults_applied: tuple[str, ...]
+    severity_bump: int | None
+    tally_reasons: tuple[Reason, ...]
     urgency_tally: int | None
     safety_level: int
-    safety_reason: str
+    safety_reason: Reason
     evidence_spans: tuple[VerifiedSpan, ...]
     flags: tuple[Reason, ...]
     original_timestamp: datetime
@@ -63,16 +57,6 @@ def _logistics_notes(job: EnrichedJob) -> tuple[str, ...]:
 
 
 def build_trace(entry: RankedJob, job: EnrichedJob, queue_length: int) -> ReasoningTrace:
-    # Stage 4b severity default: +1 unless the text names a genuine alternative.
-    if job.tier is None:
-        nr_reason, defaults = "not scored: no tier", ()
-    elif job.no_redundancy:
-        nr_reason = "no working alternative named in the report"
-        defaults = ("no-redundancy default applied: +1 (no alternative named)",)
-    else:
-        nr_reason = "report names a working alternative"
-        defaults = ("no-redundancy default removed: +0 (alternative named)",)
-
     # RankedJob doesn't carry safety_level; the adapter is the one place that maps it.
     safety_level = to_rank_input(job).safety_level
     return ReasoningTrace(
@@ -81,12 +65,11 @@ def build_trace(entry: RankedJob, job: EnrichedJob, queue_length: int) -> Reason
         taxonomy_match=tuple(job.taxonomy_match),
         tier=job.tier,
         base_points=job.base_points,
-        no_redundancy=job.no_redundancy,
-        no_redundancy_reason=nr_reason,
-        defaults_applied=defaults,
+        severity_bump=job.severity_bump,
+        tally_reasons=job.tally_reasons,
         urgency_tally=job.urgency_tally,
         safety_level=safety_level,
-        safety_reason=SAFETY_REASONS[safety_level],
+        safety_reason=job.safety_reason,
         evidence_spans=tuple(s for s in job.spans if s.verified),
         # Stage 3-5 flags first, then ranking's own (e.g. the no-tier flag).
         flags=(*job.flags, *entry.flags),
@@ -133,9 +116,9 @@ def render_coordinator(trace: ReasoningTrace) -> str:
         rows += [
             ("tier", trace.tier, f"({TIER_SOURCE})"),
             ("base_points", str(trace.base_points), "(from tier, not text)"),
-            ("no_redundancy", f"+{trace.no_redundancy}", f"({trace.no_redundancy_reason})"),
-            *[("default", d, "") for d in trace.defaults_applied],
-            ("urgency_tally", str(trace.urgency_tally), f"({trace.base_points} + {trace.no_redundancy})"),
+            ("severity_bump", f"+{trace.severity_bump}", ""),
+            *[("tally_reason", r, "") for r in trace.tally_reasons],
+            ("urgency_tally", str(trace.urgency_tally), f"({trace.base_points} + {trace.severity_bump})"),
         ]
     rows.append(("safety_level", str(trace.safety_level), f"({trace.safety_reason})"))
     rows += [(f"span:{s.field}", f'"{s.text}"', "verified [3]") for s in trace.evidence_spans]

@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from triage.adapter import to_rank_input
+from triage.evaluation import NO_ALTERNATIVE, NO_HAZARD
 from triage.explain import (
     ReasoningTrace,
     build_traces,
@@ -13,6 +14,7 @@ from triage.models import EnrichedJob, VerifiedSpan
 from triage.ranking import NO_TIER_FLAG, REVIEW_BAND_REASON, rank
 
 MON = datetime(2026, 9, 28, 9, 0, tzinfo=timezone.utc)
+ACTIVE_REASON = "Active hazard described: 'water coming through the light fitting' — full override"
 
 
 def panel_d_job(**overrides: Any) -> EnrichedJob:
@@ -24,10 +26,13 @@ def panel_d_job(**overrides: Any) -> EnrichedJob:
         "taxonomy_match": ["roof leak"],
         "tier": "dangerous",
         "base_points": 3,
-        "no_redundancy": 1,
+        "severity_bump": 1,
         "urgency_tally": 4,
+        "tally_reasons": (NO_ALTERNATIVE,),
         "safety_flag": True,
         "safety_level": "active",
+        "safety_reason": ACTIVE_REASON,
+        "flags": (),
         "spans": [
             VerifiedSpan(field="hazard", text="water coming through the light fitting", verified=True),
             VerifiedSpan(field="coping_mentioned", text="made up", verified=False),
@@ -44,8 +49,12 @@ def standard_job(request_id: str, **overrides: Any) -> EnrichedJob:
         "original_report_timestamp": MON,
         "tier": "standard",
         "base_points": 2,
-        "no_redundancy": 1,
+        "severity_bump": 1,
         "urgency_tally": 3,
+        "tally_reasons": (NO_ALTERNATIVE,),
+        "safety_level": "none",
+        "safety_reason": NO_HAZARD,
+        "flags": (),
     }
     return EnrichedJob(**{**fields, **overrides})
 
@@ -59,8 +68,8 @@ def test_panel_d_trace() -> None:
     (tr,) = traces(panel_d_job())
     assert tr.original_timestamp == datetime.fromtimestamp(1726041600, tz=timezone.utc)
     assert tr.taxonomy_match == ("roof leak",)
-    assert tr.defaults_applied == ("no-redundancy default applied: +1 (no alternative named)",)
-    assert tr.safety_level == 2 and "active hazard" in tr.safety_reason
+    assert tr.tally_reasons == (NO_ALTERNATIVE,)
+    assert tr.safety_level == 2 and tr.safety_reason == ACTIVE_REASON
     assert [s.text for s in tr.evidence_spans] == ["water coming through the light fitting"]
     view = render_coordinator(tr)
     assert "412 km" in view and "not in sort_key" in view
@@ -122,9 +131,17 @@ def test_safety_sms_says_safety_job_without_comparison() -> None:
     assert "sits above" not in sms and "non-safety" not in sms
 
 
-def test_conditional_safety_reason_from_level() -> None:
-    (tr,) = traces(standard_job("R-AAAA", safety_level="conditional"))
-    assert tr.safety_level == 1 and "conditional hazard" in tr.safety_reason
+def test_safety_reason_comes_from_the_job() -> None:
+    reason = "Conditional hazard described: 'if it rains' — elevated, does not bypass active hazards"
+    (tr,) = traces(standard_job("R-AAAA", safety_level="conditional", safety_reason=reason))
+    assert tr.safety_level == 1 and tr.safety_reason == reason
+
+
+def test_coordinator_view_shows_tally_and_safety_reasons() -> None:
+    (tr,) = traces(panel_d_job())
+    view = render_coordinator(tr)
+    assert NO_ALTERNATIVE in view and ACTIVE_REASON in view
+    assert "+1" in view and "(3 + 1)" in view
 
 
 def test_distance_none_renders_as_unknown() -> None:
@@ -141,7 +158,7 @@ def test_trace_carries_enriched_job_flags() -> None:
 
 
 def test_untiered_safety_job_carries_no_tier_flag_and_renders() -> None:
-    job = panel_d_job(tier=None, base_points=None, no_redundancy=0, urgency_tally=None)
+    job = panel_d_job(tier=None, base_points=None, severity_bump=None, urgency_tally=None, tally_reasons=())
     (tr,) = traces(job)
     assert NO_TIER_FLAG in tr.flags
     assert "untiered" in render_coordinator(tr)
@@ -156,7 +173,7 @@ def test_coordinator_view_shows_position_and_decided_by() -> None:
 
 
 def test_review_band_entry_uses_review_band_reason() -> None:
-    job = standard_job("R-AAAA", tier=None, base_points=None, no_redundancy=0, urgency_tally=None)
+    job = standard_job("R-AAAA", tier=None, base_points=None, severity_bump=None, urgency_tally=None, tally_reasons=())
     result = rank([to_rank_input(job)])
     assert result.review_band == ("R-AAAA",)
     view = render_review_entry(job)

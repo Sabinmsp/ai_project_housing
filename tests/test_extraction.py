@@ -324,3 +324,13 @@ def test_extraction_imports_only_fault_names_from_tiers():
                   if isinstance(node, ast.ImportFrom) and (node.module or "").endswith("tiers")
                   for alias in node.names]
     assert from_tiers == ["FAULT_NAMES"]
+
+
+def test_taxonomy_match_without_fault_description_rejected():
+    bad = json.loads(GOOD)
+    bad["fault_description"] = None
+    bad["quoted_spans"] = [s for s in bad["quoted_spans"] if s["field"] != "fault_description"]
+    with pytest.raises(ValueError, match="fault_description"):
+        ExtractedFacts.model_validate(bad)
+    c = ScriptedClient(json.dumps(bad), json.dumps(bad))
+    assert extract(report("toilet blocked"), c).status is ExtractionStatus.FLAGGED_FOR_HUMAN

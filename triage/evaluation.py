@@ -6,7 +6,7 @@ No I/O, no model.
 from collections.abc import Sequence
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from triage.models import ExtractedFacts, Reason
 from triage.tiers import TIER_TABLE, FaultEntry
@@ -58,21 +58,32 @@ class TallyResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     tally: int | None = Field(ge=2, le=4)
+    base: int | None = Field(ge=2, le=3)
+    bump: int | None = Field(ge=0, le=1)
     reasons: tuple[Reason, ...]
     flags: tuple[Reason, ...]
+
+    @model_validator(mode="after")
+    def _parts_add_up(self) -> "TallyResult":
+        if self.tally is None:
+            if self.base is not None or self.bump is not None:
+                raise ValueError("base and bump must be None when tally is None")
+        elif self.base is None or self.bump is None or self.base + self.bump != self.tally:
+            raise ValueError(f"tally {self.tally} must equal base {self.base} + bump {self.bump}")
+        return self
 
 
 def compute_tally(tier: TierResult, facts: ExtractedFacts, unverified: Unverified) -> TallyResult:
     """Base points for the tier plus the +1 bump, taking the highest-scoring candidate fault."""
     if tier.tier is None:
-        return TallyResult(tally=None, reasons=(), flags=())
+        return TallyResult(tally=None, base=None, bump=None, reasons=(), flags=())
 
     # D1 (invariant 8): an unverified span never lowers a score, so its claim is ignored.
     failed = {field for field, _ in unverified}
     alternative = facts.alternative_mentioned and "alternative_mentioned" not in failed
     sign = facts.fault_or_sign == "sign" and "fault_or_sign" not in failed
 
-    def score(entry: FaultEntry) -> tuple[int, tuple[str, ...]]:
+    def score(entry: FaultEntry) -> tuple[int, int, tuple[str, ...]]:
         zero_reasons = []
         if entry.degraded:  # FR2t: dripping or stiff taps leave the function working (§4.3).
             zero_reasons.append(DEGRADED)
@@ -83,21 +94,21 @@ def compute_tally(tier: TierResult, facts: ExtractedFacts, unverified: Unverifie
         if sign:  # §4.2 sign vs fault: a sign gets the tier of its fault but no +1.
             zero_reasons.append(SIGN)
         if zero_reasons:
-            return _BASE_POINTS[entry.tier], tuple(zero_reasons)
-        return _BASE_POINTS[entry.tier] + 1, (NO_ALTERNATIVE,)
+            return _BASE_POINTS[entry.tier], 0, tuple(zero_reasons)
+        return _BASE_POINTS[entry.tier], 1, (NO_ALTERNATIVE,)
 
     # D2 (invariant 8): ambiguity errs high, so the best-scoring candidate wins.
     # max() keeps the first of equal scores, i.e. table order.
-    tally, reasons = max((score(e) for e in tier.entries), key=lambda s: s[0])
+    base, bump, reasons = max((score(e) for e in tier.entries), key=lambda s: s[0] + s[1])
 
     # Only flag an ignored claim when it actually kept the +1; otherwise the flag text is false.
     flags: list[str] = []
-    if reasons == (NO_ALTERNATIVE,):
+    if bump == 1:
         if facts.alternative_mentioned and not alternative:
             flags.append(UNVERIFIED_ALTERNATIVE)
         if facts.fault_or_sign == "sign" and not sign:
             flags.append(UNVERIFIED_SIGN)
-    return TallyResult(tally=tally, reasons=reasons, flags=tuple(flags))
+    return TallyResult(tally=base + bump, base=base, bump=bump, reasons=reasons, flags=tuple(flags))
 
 
 UNCLEAR_HAZARD = "Possible hazard — needs a direct look: '{quote}'"

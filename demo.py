@@ -15,10 +15,10 @@ from triage.extraction import OfflineExtractor, default_client, extract
 from triage.intake import DuplicateRequestError, SQLiteReportRepository
 from triage.models import EnrichedJob, ExtractionStatus, VerifiedSpan
 from triage.adapter import to_rank_input
+from triage.evaluation import evaluate
 from triage.explain import build_traces, render_coordinator, render_review_entry, render_tenant_sms
 from triage.ranking import rank
 from triage.report_files import load_reports
-from triage.tiers import TIER_TABLE
 
 REPORTS_DIR = Path(__file__).with_name("reports")
 
@@ -26,25 +26,28 @@ REPORTS_DIR = Path(__file__).with_name("reports")
 _STANDIN_DISTANCE = {"Wadeye": 412, "Maningrida": 510, "Darwin": 0, "Galiwinku": 560}
 
 
+_SAFETY_LEVEL_NAMES = ("none", "conditional", "active")  # index = safety level
+
+
 def _standin_stages_3_to_5(report, facts) -> EnrichedJob:
     spans = [VerifiedSpan(field=s.field, text=s.text, verified=s.text in report.raw_text)
              for s in facts.quoted_spans]
-    tiers = [TIER_TABLE[m].tier for m in facts.taxonomy_match if m in TIER_TABLE]
-    common = dict(request_id=report.request_id, community=report.community,
-                  original_report_timestamp=report.original_report_timestamp,
-                  fault_description=facts.fault_description,
-                  taxonomy_match=facts.taxonomy_match, spans=spans,
-                  distance_cost_km=_STANDIN_DISTANCE.get(report.community))
-    if not tiers:
-        return EnrichedJob(**common)
-    tier = "dangerous" if "dangerous" in tiers else "standard"
-    base = 3 if tier == "dangerous" else 2
-    nr = 0 if facts.alternative_mentioned else 1
-    level = facts.mechanism_type or "none"
-    flags = ["ambiguity_flag"] if len(facts.taxonomy_match) > 1 else []
-    return EnrichedJob(**common, tier=tier, base_points=base, no_redundancy=nr,
-                       urgency_tally=base + nr, safety_flag=(level == "active"),
-                       safety_level=level, flags=flags)
+    if not facts.fault_description:
+        # D4: extract() routes these out of scope, so evaluation must never see one.
+        raise ValueError(f"{report.request_id}: no fault named, should not reach evaluation")
+    ev = evaluate(facts, frozenset((s.field, s.text) for s in spans if not s.verified))
+    level = _SAFETY_LEVEL_NAMES[ev.safety.level]
+    return EnrichedJob(
+        request_id=report.request_id, community=report.community,
+        original_report_timestamp=report.original_report_timestamp,
+        fault_description=facts.fault_description, taxonomy_match=facts.taxonomy_match,
+        spans=spans, distance_cost_km=_STANDIN_DISTANCE.get(report.community),
+        tier=ev.tier.tier,
+        base_points=ev.tally.base, severity_bump=ev.tally.bump,
+        urgency_tally=ev.tally.tally, tally_reasons=ev.tally.reasons,
+        safety_flag=(level == "active"), safety_level=level, safety_reason=ev.safety.reason,
+        flags=ev.flags,
+    )
 # --------------------------------------------------------------------------
 
 

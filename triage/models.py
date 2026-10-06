@@ -183,6 +183,9 @@ class ExtractedFacts(BaseModel):
         if missing:
             raise ValueError(f"claimed facts without a quoted span: {missing}")
 
+        # A list match with no fault named is inconsistent extraction: reject so extract() retries.
+        if self.taxonomy_match and not self.fault_description:
+            raise ValueError("fault_description: required when taxonomy_match is non-empty")
         # Unclear means no pathway was described, so evaluation picks the safety level, not the model.
         if self.hazard_status == "described" and self.mechanism_type is None:
             raise ValueError("mechanism_type: required when hazard_status is 'described'")
@@ -229,14 +232,18 @@ class EnrichedJob(BaseModel):
     # Stage 5 output without it still validates; never read by the sort.
     taxonomy_match: list[str] = Field(default_factory=list)
 
-    # Stage 4 evaluation. urgency_tally None means REVIEW BAND.
-    tier: Optional[Literal["dangerous", "standard"]] = None
-    base_points: Optional[int] = None
-    no_redundancy: int = 0  # 0 or 1
-    urgency_tally: Optional[int] = Field(default=None, ge=2, le=4)
+    # Evaluation output. No defaults: an omission must raise, not read as "no tier" or
+    # "no hazard" (same reason as ExtractedFacts).
+    tier: Optional[Literal["dangerous", "standard"]]
+    base_points: Optional[int] = Field(ge=2, le=3)
+    # The +1: removed by an alternative, a sign-only report, or a degraded-by-definition fault.
+    severity_bump: Optional[int] = Field(ge=0, le=1)
+    urgency_tally: Optional[int] = Field(ge=2, le=4)
+    tally_reasons: tuple[Reason, ...]
     safety_flag: bool = False
-    safety_level: Literal["active", "conditional", "none"] = "none"
-    flags: list[str] = Field(default_factory=list)
+    safety_level: Literal["active", "conditional", "none"]
+    safety_reason: Reason
+    flags: tuple[Reason, ...]
     spans: list[VerifiedSpan] = Field(default_factory=list)
 
     # Stage 5 logistics: display only, never read by the sort
@@ -247,15 +254,20 @@ class EnrichedJob(BaseModel):
     starvation_line: Optional[str] = None
 
     @model_validator(mode="after")
-    def _tally_consistent(self) -> "EnrichedJob":
+    def _consistent(self) -> "EnrichedJob":
+        if self.safety_flag != (self.safety_level == "active"):
+            raise ValueError(f"safety_flag={self.safety_flag} disagrees with safety_level={self.safety_level!r}")
         if self.urgency_tally is None:
+            if self.base_points is not None or self.severity_bump is not None:
+                raise ValueError("base_points and severity_bump must be None when urgency_tally is None")
             return self
-        if self.tier is None or self.base_points is None:
-            raise ValueError("a scored job must carry its tier and base_points")
-        if self.base_points + self.no_redundancy != self.urgency_tally:
-            raise ValueError("urgency_tally must equal base_points + no_redundancy")
+        if self.tier is None or self.base_points is None or self.severity_bump is None:
+            raise ValueError("a scored job must carry its tier, base_points and severity_bump")
+        if self.base_points + self.severity_bump != self.urgency_tally:
+            raise ValueError("urgency_tally must equal base_points + severity_bump")
         return self
 
     @property
     def in_review_band(self) -> bool:
-        return self.urgency_tally is None
+        # §3.4, §4.4: a no-tier safety job is ranked, not held.
+        return self.urgency_tally is None and self.safety_level == "none"

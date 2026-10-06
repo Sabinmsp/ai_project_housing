@@ -5,6 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from triage.adapter import to_rank_input
+from triage.evaluation import NO_ALTERNATIVE, NO_HAZARD
 from triage.models import EnrichedJob
 from triage.ranking import rank
 
@@ -18,8 +19,12 @@ def enriched(**overrides: Any) -> EnrichedJob:
         "original_report_timestamp": MON,
         "tier": "standard",
         "base_points": 2,
-        "no_redundancy": 1,
+        "severity_bump": 1,
         "urgency_tally": 3,
+        "tally_reasons": (NO_ALTERNATIVE,),
+        "safety_level": "none",
+        "safety_reason": NO_HAZARD,
+        "flags": (),
     }
     return EnrichedJob(**{**fields, **overrides})
 
@@ -42,7 +47,7 @@ def test_urgency_tally_becomes_tally() -> None:
 
 
 def test_none_tally_stays_none() -> None:
-    job = enriched(tier=None, base_points=None, no_redundancy=0, urgency_tally=None)
+    job = enriched(tier=None, base_points=None, severity_bump=None, urgency_tally=None)
     assert to_rank_input(job).tally is None
 
 
@@ -78,7 +83,7 @@ def test_end_to_end_order() -> None:
         request_id="R-ROOF",
         tier="dangerous",
         base_points=3,
-        no_redundancy=0,
+        severity_bump=0,
         urgency_tally=3,
         safety_level="conditional",
         original_report_timestamp=MON + timedelta(days=1),
@@ -92,3 +97,28 @@ def test_end_to_end_order() -> None:
     )
     result = rank([to_rank_input(j) for j in (blocked_toilet, roof_into_light, no_hot_water)])
     assert [entry.job_id for entry in result.ranked] == ["R-ROOF", "R-HOTWATER", "R-TOILET"]
+
+
+# --- EnrichedJob rules the adapter relies on ----------------------------------
+
+
+@pytest.mark.parametrize(
+    "field", ["tier", "base_points", "severity_bump", "urgency_tally", "tally_reasons", "safety_level", "safety_reason", "flags"]
+)
+def test_enriched_job_field_without_default_must_be_given(field: str) -> None:
+    fields = enriched().model_dump()
+    del fields[field]
+    with pytest.raises(ValidationError, match=field):
+        EnrichedJob.model_validate(fields)
+
+
+def test_safety_flag_must_match_level_at_construction() -> None:
+    with pytest.raises(ValidationError, match="disagrees"):
+        enriched(safety_level="active", safety_flag=False)
+
+
+def test_review_band_needs_no_tally_and_no_safety() -> None:
+    untiered = {"tier": None, "base_points": None, "severity_bump": None, "urgency_tally": None, "tally_reasons": ()}
+    assert enriched(**untiered).in_review_band
+    assert not enriched(**untiered, safety_level="conditional").in_review_band
+    assert not enriched().in_review_band
