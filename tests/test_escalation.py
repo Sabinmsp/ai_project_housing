@@ -19,13 +19,13 @@ def saved_report(repo, text):
 def test_escalation_re_enters_stage_2_and_keeps_timestamp():
     repo, client = SQLiteReportRepository(), OfflineExtractor()
     r = saved_report(repo, "roof leaking in the bedroom")
-    assert extract(r, client).facts.mechanism_type is None
+    assert extract(r, client).extraction.faults[0].mechanism_type is None
 
     later = T0 + timedelta(days=20)
     updated, res = escalate(repo, r.request_id,
                             "now water coming through the light fitting", later, client)
 
-    assert res.facts.mechanism_type == "active"  # re-read over the whole history
+    assert res.extraction.faults[0].mechanism_type == "active"  # re-read over the whole history
     assert updated.request_id == r.request_id
     assert updated.original_report_timestamp == T0  # fairness never resets
 

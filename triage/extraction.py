@@ -19,6 +19,7 @@ from .models import (
     ExtractionStatus,
     QuotedSpan,
     Report,
+    ReportExtraction,
 )
 # Invariant 1: import names only. TIER_TABLE carries tiers and must never be imported here.
 from .tiers import FAULT_NAMES
@@ -97,7 +98,7 @@ class OpenAICompatibleClient:
                       {"role": "user", "content": user}],
             response_format={
                 "type": "json_schema",
-                "json_schema": {"name": "ExtractedFacts", "strict": True, "schema": schema},
+                "json_schema": {"name": "ReportExtraction", "strict": True, "schema": schema},
             },
         )
         return resp.choices[0].message.content or ""
@@ -110,7 +111,7 @@ _DROP_FROM_SCHEMA = ("default", "minLength", "maxLength", "description")
 
 
 def response_schema() -> dict:
-    """ExtractedFacts as a strict structured-output schema.
+    """ReportExtraction as a strict structured-output schema.
 
     Strict mode makes the provider constrain decoding to the schema instead of
     treating it as a hint. It requires every property to be listed as required
@@ -131,15 +132,15 @@ def response_schema() -> dict:
                 tighten(value)
         return node
 
-    return tighten(ExtractedFacts.model_json_schema())
+    return tighten(ReportExtraction.model_json_schema())
 
 
-def _parse(raw_json: str, fault_names: tuple[str, ...]) -> ExtractedFacts:
-    facts = ExtractedFacts.model_validate_json(raw_json)
-    unknown = [m for m in facts.taxonomy_match if m not in fault_names]
+def _parse(raw_json: str, fault_names: tuple[str, ...]) -> ReportExtraction:
+    extraction = ReportExtraction.model_validate_json(raw_json)
+    unknown = [m for f in extraction.faults for m in f.taxonomy_match if m not in fault_names]
     if unknown:
         raise ValueError(f"taxonomy_match not on the fault list: {unknown}")
-    return facts
+    return extraction
 
 
 def extract(report: Report, client: LLMClient,
@@ -152,20 +153,18 @@ def extract(report: Report, client: LLMClient,
     for attempt in (1, 2):
         try:
             raw = client.complete_json(SYSTEM_PROMPT, user, schema)
-            facts = _parse(raw, fault_names)
+            extraction = _parse(raw, fault_names)
         except (ValidationError, ValueError, json.JSONDecodeError) as e:
             errors.append(f"attempt {attempt}: {e.__class__.__name__}: {str(e)[:300]}")
             continue
-        status = (ExtractionStatus.NO_FAULT_NAMED
-                  if not facts.fault_description and not facts.taxonomy_match
-                  else ExtractionStatus.OK)
+        status = ExtractionStatus.OK if extraction.faults else ExtractionStatus.NO_FAULT_NAMED
         return ExtractionResult(request_id=report.request_id, status=status,
-                                facts=facts, attempts=attempt, errors=errors,
+                                extraction=extraction, attempts=attempt, errors=errors,
                                 extractor=client.name)
 
     return ExtractionResult(request_id=report.request_id,
                             status=ExtractionStatus.FLAGGED_FOR_HUMAN,
-                            facts=None, attempts=2, errors=errors,
+                            extraction=None, attempts=2, errors=errors,
                             extractor=client.name)
 
 
@@ -213,7 +212,13 @@ class OfflineExtractor:
         return self.read(text).model_dump_json()
 
     @staticmethod
-    def read(text: str) -> ExtractedFacts:
+    def read(text: str) -> ReportExtraction:
+        """One entry for the fault the patterns find, or [] when none is named."""
+        facts = OfflineExtractor._read_facts(text)
+        return ReportExtraction(faults=[facts] if facts.fault_description else [])
+
+    @staticmethod
+    def _read_facts(text: str) -> ExtractedFacts:
         spans: list[QuotedSpan] = []
         matches: list[str] = []
         first_fault_span: Optional[str] = None

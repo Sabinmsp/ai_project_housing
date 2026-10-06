@@ -1,0 +1,158 @@
+{
+  "T-01_darwin.pdf": {
+    "alternative_mentioned": true,
+    "claim_mismatch": null,
+    "coping_mentioned": false,
+    "fault_description": "toilet blocked",
+    "fault_or_sign": "fault",
+    "harm_claimed": false,
+    "hazard_status": "none",
+    "impact_status": "ongoing",
+    "mechanism_type": null,
+    "quoted_spans": [
+      {
+        "field": "taxonomy_match",
+        "text": "toilet blocked"
+      },
+      {
+        "field": "fault_description",
+        "text": "toilet blocked"
+      },
+      {
+        "field": "alternative_mentioned",
+        "text": "using the other one"
+      }
+    ],
+    "taxonomy_match": [
+      "blocked or broken toilet"
+    ],
+    "worsening_mentioned": false
+  },
+  "T-02_wadeye.pdf": {
+    "alternative_mentioned": false,
+    "claim_mismatch": null,
+    "coping_mentioned": true,
+    "fault_description": "toilet blocked",
+    "fault_or_sign": "fault",
+    "harm_claimed": false,
+    "hazard_status": "none",
+    "impact_status": "ongoing",
+    "mechanism_type": null,
+    "quoted_spans": [
+      {
+        "field": "taxonomy_match",
+        "text": "toilet blocked"
+      },
+      {
+        "field": "fault_description",
+        "text": "toilet blocked"
+      },
+      {
+        "field": "coping_mentioned",
+        "text": "the servo"
+      }
+    ],
+    "taxonomy_match": [
+      "blocked or broken toilet"
+    ],
+    "worsening_mentioned": false
+  },
+  "T-03_maningrida.pdf": {
+    "alternative_mentioned": false,
+    "claim_mismatch": null,
+    "coping_mentioned": false,
+    "fault_description": "roof leaking",
+    "fault_or_sign": "fault",
+    "harm_claimed": false,
+    "hazard_status": "described",
+    "impact_status": "ongoing",
+    "mechanism_type": "active",
+    "quoted_spans": [
+      {
+        "field": "taxonomy_match",
+        "text": "roof leaking"
+      },
+      {
+        "field": "fault_description",
+        "text": "roof leaking"
+      },
+      {
+        "field": "hazard",
+        "text": "water coming through the light fitting"
+      }
+    ],
+    "taxonomy_match": [
+      "roof leak"
+    ],
+    "worsening_mentioned": false
+  },
+  "T-04_galiwinku.pdf": {
+    "alternative_mentioned": false,
+    "claim_mismatch": null,
+    "coping_mentioned": false,
+    "fault_description": "no hot water",
+    "fault_or_sign": "fault",
+    "harm_claimed": false,
+    "hazard_status": "none",
+    "impact_status": "ongoing",
+    "mechanism_type": null,
+    "quoted_spans": [
+      {
+        "field": "taxonomy_match",
+        "text": "no hot water"
+      },
+      {
+        "field": "fault_description",
+        "text": "no hot water"
+      }
+    ],
+    "taxonomy_match": [
+      "hot water system not working"
+    ],
+    "worsening_mentioned": false
+  },
+  "T-05_wadeye.pdf": {
+    "alternative_mentioned": false,
+    "claim_mismatch": null,
+    "coping_mentioned": false,
+    "fault_description": "the ceiling fan wobbles and makes a noise",
+    "fault_or_sign": "fault",
+    "harm_claimed": false,
+    "hazard_status": "none",
+    "impact_status": "ongoing",
+    "mechanism_type": null,
+    "quoted_spans": [
+      {
+        "field": "fault_description",
+        "text": "the ceiling fan wobbles and makes a noise"
+      }
+    ],
+    "taxonomy_match": [],
+    "worsening_mentioned": false
+  },
+  "T-06_darwin.pdf": {
+    "alternative_mentioned": false,
+    "claim_mismatch": null,
+    "coping_mentioned": false,
+    "fault_description": "toilet blocked",
+    "fault_or_sign": "fault",
+    "harm_claimed": false,
+    "hazard_status": "none",
+    "impact_status": "ongoing",
+    "mechanism_type": null,
+    "quoted_spans": [
+      {
+        "field": "taxonomy_match",
+        "text": "toilet blocked"
+      },
+      {
+        "field": "fault_description",
+        "text": "toilet blocked"
+      }
+    ],
+    "taxonomy_match": [
+      "blocked or broken toilet"
+    ],
+    "worsening_mentioned": false
+  }
+}

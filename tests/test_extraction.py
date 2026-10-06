@@ -16,7 +16,8 @@ from triage.extraction import (
     response_schema,
 )
 from triage.intake import create_report
-from triage.models import ExtractedFacts, ExtractionStatus
+from triage.models import ExtractedFacts, ExtractionStatus, ReportExtraction
+from triage.report_files import parse_report_text, read_text
 from triage.tiers import TIER_TABLE
 
 T0 = datetime(2026, 9, 1, tzinfo=timezone.utc)
@@ -60,6 +61,14 @@ GOOD = json.dumps({
 })
 
 
+def response(*faults: dict) -> str:
+    """A model response: the ReportExtraction wrapper around zero or more fault records."""
+    return json.dumps({"faults": list(faults)})
+
+
+GOOD_RESPONSE = response(json.loads(GOOD))
+
+
 # --- the model can never see scoring information -------------------------
 
 def test_prompt_contains_no_tier_or_scoring_information():
@@ -98,7 +107,7 @@ def test_response_schema_is_strict():
                 yield from objects(v)
 
     found = list(objects(response_schema()))
-    assert len(found) == 2  # ExtractedFacts and QuotedSpan
+    assert len(found) == 3  # ReportExtraction, ExtractedFacts and QuotedSpan
     for obj in found:
         assert obj["additionalProperties"] is False
         assert set(obj["required"]) == set(obj["properties"])
@@ -107,13 +116,13 @@ def test_response_schema_is_strict():
 # --- validation boundary --------------------------------------------------
 
 def test_good_response_first_try():
-    c = ScriptedClient(GOOD)
+    c = ScriptedClient(GOOD_RESPONSE)
     res = extract(report("toilet blocked"), c)
     assert res.status is ExtractionStatus.OK and res.attempts == 1 and c.calls == 1
 
 
 def test_malformed_then_good_retries_once():
-    c = ScriptedClient("not json", GOOD)
+    c = ScriptedClient("not json", GOOD_RESPONSE)
     res = extract(report("toilet blocked"), c)
     assert res.status is ExtractionStatus.OK and res.attempts == 2 and len(res.errors) == 1
 
@@ -122,13 +131,13 @@ def test_two_failures_flag_for_human():
     c = ScriptedClient("{}garbage", '{"fault_description": 5}')
     res = extract(report("toilet blocked"), c)
     assert res.status is ExtractionStatus.FLAGGED_FOR_HUMAN
-    assert res.facts is None and c.calls == 2
+    assert res.extraction is None and c.calls == 2
 
 
 def test_unknown_fault_name_is_a_validation_failure():
     bad = json.loads(GOOD)
     bad["taxonomy_match"] = ["toilet emergency (severe)"]
-    c = ScriptedClient(json.dumps(bad), json.dumps(bad))
+    c = ScriptedClient(response(bad), response(bad))
     assert extract(report("toilet blocked"), c).status is ExtractionStatus.FLAGGED_FOR_HUMAN
 
 
@@ -158,7 +167,7 @@ def test_llm_cannot_add_scoring_fields(field, value):
     bad[field] = value
     with pytest.raises(ValueError):
         ExtractedFacts.model_validate(bad)
-    c = ScriptedClient(json.dumps(bad), json.dumps(bad))
+    c = ScriptedClient(response(bad), response(bad))
     assert extract(report("toilet blocked"), c).status is ExtractionStatus.FLAGGED_FOR_HUMAN
 
 
@@ -243,7 +252,9 @@ def test_mechanism_type_without_described_rejected(status):
 
 
 def test_response_schema_requires_every_field():
-    assert set(response_schema()["required"]) == set(ExtractedFacts.model_fields)
+    schema = response_schema()
+    assert schema["required"] == ["faults"]
+    assert set(schema["$defs"]["ExtractedFacts"]["required"]) == set(ExtractedFacts.model_fields)
 
 
 # --- offline reader: Panel B, same fault three phrasings ------------------
@@ -255,7 +266,7 @@ def test_response_schema_requires_every_field():
 ])
 def test_panel_b_phrasings(text, alt, cope):
     res = extract(report(text), OfflineExtractor())
-    f = res.facts
+    (f,) = res.extraction.faults
     assert f.taxonomy_match == ["blocked or broken toilet"]
     assert f.alternative_mentioned is alt
     assert f.coping_mentioned is cope
@@ -271,27 +282,28 @@ def test_unknown_fault_gives_empty_match_but_is_not_out_of_scope():
     # expected to match "fan not working properly" here.
     text = "the ceiling fan wobbles a bit"
     res = extract(report(text), OfflineExtractor())
-    assert res.facts.taxonomy_match == []
+    (f,) = res.extraction.faults
+    assert f.taxonomy_match == []
     assert res.status is ExtractionStatus.OK  # goes on to the review band
-    assert res.facts.fault_description and res.facts.fault_description in text
+    assert f.fault_description and f.fault_description in text
 
 
 def test_active_hazard_detected():
     text = "roof leaking bad, water coming through the light fitting in kids room"
-    f = extract(report(text), OfflineExtractor()).facts
+    (f,) = extract(report(text), OfflineExtractor()).extraction.faults
     assert f.mechanism_type == "active"
     assert "roof leak" in f.taxonomy_match
 
 
 def test_conditional_hazard_detected():
     f = extract(report("roof is leaking, if it rains it drips near the power board"),
-                OfflineExtractor()).facts
+                OfflineExtractor()).extraction.faults[0]
     assert f.mechanism_type == "conditional"
 
 
 def test_offline_spans_are_real_substrings():
     text = "Toilet blocked and hot water not working, using bucket from neighbour's"
-    f = extract(report(text), OfflineExtractor()).facts
+    (f,) = extract(report(text), OfflineExtractor()).extraction.faults
     assert f.quoted_spans
     for s in f.quoted_spans:
         assert s.text in text
@@ -306,7 +318,7 @@ def test_fault_names_unique():
     ("stove's not working", ["stove or oven not working"]),
 ])
 def test_stove_element_is_not_the_stove(text, expected):
-    assert OfflineExtractor.read(text).taxonomy_match == expected
+    assert OfflineExtractor.read(text).faults[0].taxonomy_match == expected
 
 
 def test_every_pattern_is_keyed_by_a_table_name():
@@ -332,5 +344,88 @@ def test_taxonomy_match_without_fault_description_rejected():
     bad["quoted_spans"] = [s for s in bad["quoted_spans"] if s["field"] != "fault_description"]
     with pytest.raises(ValueError, match="fault_description"):
         ExtractedFacts.model_validate(bad)
-    c = ScriptedClient(json.dumps(bad), json.dumps(bad))
+    c = ScriptedClient(response(bad), response(bad))
     assert extract(report("toilet blocked"), c).status is ExtractionStatus.FLAGGED_FOR_HUMAN
+
+
+
+# --- ReportExtraction (step 3.1b): one entry per fault ------------------------------
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def test_report_extraction_requires_faults():
+    with pytest.raises(ValueError, match="faults"):
+        ReportExtraction.model_validate({})
+
+
+def test_report_extraction_rejects_extra_field():
+    with pytest.raises(ValueError, match="severity"):
+        ReportExtraction.model_validate({"faults": [], "severity": "high"})
+
+
+def test_report_extraction_is_frozen():
+    extraction = ReportExtraction.model_validate({"faults": []})
+    with pytest.raises(ValueError):
+        extraction.faults = [ExtractedFacts.model_validate(json.loads(GOOD))]
+
+
+def test_report_extraction_rejects_item_without_fault():
+    no_fault = json.loads(GOOD) | {"fault_description": None, "taxonomy_match": [], "quoted_spans": []}
+    with pytest.raises(ValueError, match="names no fault"):
+        ReportExtraction.model_validate({"faults": [json.loads(GOOD), no_fault]})
+
+
+def test_empty_faults_is_no_fault_named():
+    assert ReportExtraction.model_validate({"faults": []}).faults == ()
+    res = extract(report("hi can someone call me back"), ScriptedClient(response()))
+    assert res.status is ExtractionStatus.NO_FAULT_NAMED and res.extraction.faults == ()
+
+
+def test_two_faults_parse_as_two_entries():
+    gas = json.loads(GOOD) | {
+        "fault_description": "smell gas", "taxonomy_match": ["gas leak"],
+        "quoted_spans": [{"field": "fault_description", "text": "smell gas"},
+                         {"field": "taxonomy_match", "text": "smell gas"}],
+    }
+    res = extract(report("toilet blocked and I can smell gas"), ScriptedClient(response(json.loads(GOOD), gas)))
+    assert res.status is ExtractionStatus.OK
+    assert [f.taxonomy_match for f in res.extraction.faults] == [["blocked or broken toilet"], ["gas leak"]]
+
+
+def test_model_facing_schema_is_a_list_of_extracted_facts():
+    schema = response_schema()
+    assert list(schema["properties"]) == ["faults"]
+    faults = schema["properties"]["faults"]
+    assert faults["type"] == "array" and faults["items"] == {"$ref": "#/$defs/ExtractedFacts"}
+    item = schema["$defs"]["ExtractedFacts"]
+    assert set(item["properties"]) == set(ExtractedFacts.model_fields)
+
+
+def test_offline_extractor_matches_pre_list_baseline():
+    """faults[0] for every report in reports/ equals what read() returned before the list change."""
+    baseline = json.loads((FIXTURES / "offline_extraction_baseline.json").read_text())
+    reports_dir = Path(__file__).parent.parent / "reports"
+    files = sorted(reports_dir.glob("*.pdf"))
+    assert [p.name for p in files] == sorted(baseline)
+    for path in files:
+        extraction = OfflineExtractor.read(parse_report_text(read_text(path)).raw_text)
+        assert len(extraction.faults) == 1, path.name
+        assert extraction.faults[0] == ExtractedFacts.model_validate(baseline[path.name]), path.name
+
+
+def test_offline_extractor_no_fault_gives_empty_list():
+    assert OfflineExtractor.read("hi can someone call me back").faults == ()
+
+
+
+def test_faults_cannot_be_changed_in_place():
+    good = ExtractedFacts.model_validate(json.loads(GOOD))
+    extraction = ReportExtraction.model_validate({"faults": [good]})
+    assert isinstance(extraction.faults, tuple)
+    assert not hasattr(extraction.faults, "append")
+    with pytest.raises(TypeError):
+        extraction.faults[0] = good  # type: ignore[index]
+    with pytest.raises(ValueError):
+        extraction.faults = (good, good)  # frozen model
+    assert extraction.faults == (good,)

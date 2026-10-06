@@ -13,7 +13,7 @@ from pathlib import Path
 
 from triage.extraction import OfflineExtractor, default_client, extract
 from triage.intake import DuplicateRequestError, SQLiteReportRepository
-from triage.models import EnrichedJob, ExtractionStatus, VerifiedSpan
+from triage.models import EnrichedJob, ExtractionStatus, ReportExtraction, VerifiedSpan
 from triage.adapter import to_rank_input
 from triage.evaluation import evaluate
 from triage.explain import build_traces, render_coordinator, render_review_entry, render_tenant_sms
@@ -48,6 +48,14 @@ def _standin_stages_3_to_5(report, facts) -> EnrichedJob:
         safety_flag=(level == "active"), safety_level=level, safety_reason=ev.safety.reason,
         flags=ev.flags,
     )
+
+
+def _standin_jobs(report, extraction: ReportExtraction) -> list[EnrichedJob]:
+    """One job per fault. [] (no fault named) never gets here: extract() routes it out of scope."""
+    if len(extraction.faults) > 1:
+        # Raise rather than drop: a silently lost second fault could be the hazard.
+        raise NotImplementedError("compound reports split into jobs in step 3.5")
+    return [_standin_stages_3_to_5(report, facts) for facts in extraction.faults]
 # --------------------------------------------------------------------------
 
 
@@ -116,24 +124,24 @@ def main() -> None:
     for report in repo.all():
         res = extract(report, client)
         print(f"\n{report.request_id}  status={res.status.value}  attempts={res.attempts}")
-        if res.facts is None:
+        if res.extraction is None:
             print(f"  -> coordinator follow-up: {res.errors}")
             continue
-        f = res.facts
-        print(f"  fault_description: {f.fault_description!r}")
-        print(f"  taxonomy_match: {f.taxonomy_match}")
-        print(f"  alternative_mentioned={f.alternative_mentioned}  "
-              f"coping_mentioned={f.coping_mentioned}  impact_status={f.impact_status}")
-        print(f"  hazard_status: {f.hazard_status}  mechanism_type={f.mechanism_type}")
-        for span in f.quoted_spans:
-            print(f"  quote [{span.field}]: {span.text!r}")
+        for f in res.extraction.faults:
+            print(f"  fault_description: {f.fault_description!r}")
+            print(f"  taxonomy_match: {f.taxonomy_match}")
+            print(f"  alternative_mentioned={f.alternative_mentioned}  "
+                  f"coping_mentioned={f.coping_mentioned}  impact_status={f.impact_status}")
+            print(f"  hazard_status: {f.hazard_status}  mechanism_type={f.mechanism_type}")
+            for span in f.quoted_spans:
+                print(f"  quote [{span.field}]: {span.text!r}")
         if res.status is ExtractionStatus.OK:
-            extracted.append((report, f))
+            extracted.append((report, res.extraction))
         else:
             print("  -> no fault named: out of scope, coordinator contacts tenant")
 
     # ---- STAGES 3-5: teammates (placeholders in this demo) ----------------
-    jobs = [_standin_stages_3_to_5(report, facts) for report, facts in extracted]
+    jobs = [job for report, extraction in extracted for job in _standin_jobs(report, extraction)]
     _heading("STAGES 3-5 - teammates' stages (placeholders here, output not shown)")
 
     # ---- STAGE 6: ranking + why-trace -------------------------------------

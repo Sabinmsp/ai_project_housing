@@ -1,7 +1,7 @@
 """Pydantic models passed between triage stages.
 
 Ranking input/output (RankInput, RankedJob, RankResult), intake (SourceTag,
-Report), extraction (QuotedSpan, ExtractedFacts, ExtractionStatus,
+Report), extraction (QuotedSpan, ExtractedFacts, ReportExtraction, ExtractionStatus,
 ExtractionResult) and the enriched job ranking is fed from (VerifiedSpan,
 EnrichedJob).
 """
@@ -196,6 +196,26 @@ class ExtractedFacts(BaseModel):
         return self
 
 
+class ReportExtraction(BaseModel):
+    """Response schema for the LLM: one entry per distinct fault the report names."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    # No default: a response without the key is rejected, never read as "no fault named".
+    # [] is the "no fault named" answer (out of scope).
+    # tuple, not list: frozen stops reassignment, tuple stops in-place append/replace.
+    faults: tuple[ExtractedFacts, ...]
+
+    @field_validator("faults")
+    @classmethod
+    def _every_item_names_a_fault(cls, faults: tuple[ExtractedFacts, ...]) -> tuple[ExtractedFacts, ...]:
+        # No fault named is an empty list, never an item without one.
+        empty = [i for i, f in enumerate(faults) if not f.fault_description]
+        if empty:
+            raise ValueError(f"faults{empty}: item names no fault (fault_description missing)")
+        return faults
+
+
 class ExtractionStatus(str, Enum):
     OK = "ok"
     FLAGGED_FOR_HUMAN = "flagged_for_human"  # failed validation twice
@@ -203,9 +223,11 @@ class ExtractionStatus(str, Enum):
 
 
 class ExtractionResult(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     request_id: str
     status: ExtractionStatus
-    facts: Optional[ExtractedFacts] = None
+    extraction: Optional[ReportExtraction] = None  # None only when FLAGGED_FOR_HUMAN
     attempts: int
     errors: list[str] = Field(default_factory=list)
     extractor: str  # "llm:<model>" or "offline"

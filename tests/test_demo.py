@@ -8,7 +8,7 @@ from triage.adapter import to_rank_input
 from triage.evaluation import Evaluation, evaluate
 from triage.extraction import OfflineExtractor
 from triage.intake import create_report
-from triage.models import EnrichedJob, ExtractedFacts
+from triage.models import EnrichedJob, ExtractedFacts, ReportExtraction
 from triage.ranking import rank
 
 
@@ -16,7 +16,7 @@ def test_stub_takes_base_and_bump_from_evaluation_not_reason_text(monkeypatch: p
     monkeypatch.setattr(evaluation, "NO_ALTERNATIVE", "reworded +1 reason")
     report = create_report(tenant_id="T", raw_text="toilet blocked", source_tag="tenant_direct",
                            community="Darwin", original_report_timestamp=datetime(2026, 9, 1, tzinfo=timezone.utc))
-    job = demo._standin_stages_3_to_5(report, OfflineExtractor.read(report.raw_text))
+    (job,) = demo._standin_jobs(report, OfflineExtractor.read(report.raw_text))
     assert job.tally_reasons == ("reworded +1 reason",)  # the patch reached evaluation
     assert (job.base_points, job.severity_bump) == (3, 1)
 
@@ -71,3 +71,19 @@ def test_stub_copies_evaluate_safety_reason() -> None:
     job, ev = stub(ROOF_COLLAPSE, ROOF_FACTS)
     assert job.safety_reason == ev.safety.reason
     assert "'water coming through the light fitting'" in job.safety_reason
+
+
+def test_compound_report_raises_instead_of_dropping_a_fault() -> None:
+    report = create_report(tenant_id="T", raw_text="toilet blocked and I can smell gas", source_tag="tenant_direct",
+                           community="Darwin", original_report_timestamp=T0)
+    toilet = OfflineExtractor.read("toilet blocked").faults[0]
+    gas = OfflineExtractor.read("I can smell gas").faults[0]
+    with pytest.raises(NotImplementedError, match="compound reports split into jobs in step 3.5"):
+        demo._standin_jobs(report, ReportExtraction(faults=[toilet, gas]))
+
+
+def test_single_fault_report_gives_one_job() -> None:
+    report = create_report(tenant_id="T", raw_text="toilet blocked", source_tag="tenant_direct",
+                           community="Darwin", original_report_timestamp=T0)
+    (job,) = demo._standin_jobs(report, OfflineExtractor.read(report.raw_text))
+    assert job.urgency_tally == 4
