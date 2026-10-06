@@ -1,3 +1,6 @@
-pydantic>=2
-pytest
-hypothesis
+pydantic>=2.5
+pytest>=8.0
+hypothesis>=6.90
+pypdf>=4.0  # reads PDF reports in reports/
+# optional, for the real LLM extractor
+openai>=1.40
