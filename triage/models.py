@@ -1,8 +1,9 @@
-"""Shared data contract for the six-stage triage pipeline.
+"""Pydantic models passed between triage stages.
 
-Stages 1, 2 and 6 are implemented in this package. Stages 3, 4 and 5 are
-owned by teammates; the models they produce (VerifiedSpan, EnrichedJob) are
-defined here so every stage agrees on field names and types.
+Ranking input/output (RankInput, RankedJob, RankResult), intake (SourceTag,
+Report), extraction (QuotedSpan, ExtractedFacts, ExtractionStatus,
+ExtractionResult) and the enriched job ranking is fed from (VerifiedSpan,
+EnrichedJob).
 """
 from __future__ import annotations
 

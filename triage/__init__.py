@@ -1,1 +1,2 @@
-"""Housing maintenance triage: Stages 1 (intake), 2 (extraction), 6 (ranking)."""
+"""Housing maintenance triage: intake, report loading, extraction, escalation,
+ranking (with the EnrichedJob adapter) and why-trace rendering."""
