@@ -95,3 +95,54 @@ def compute_tally(tier: TierResult, facts: ExtractedFacts, unverified: frozenset
         if facts.fault_or_sign == "sign" and not sign:
             flags.append(UNVERIFIED_SIGN)
     return TallyResult(tally=tally, reasons=reasons, flags=tuple(flags))
+
+
+UNCLEAR_HAZARD = "Possible hazard — needs a direct look: '{quote}'"
+UNVERIFIED_HAZARD = "Hazard quote isn't in the report — level kept, check the reading"
+NO_HAZARD = "No hazard mechanism described"
+
+
+class SafetyResult(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    level: int = Field(ge=0, le=2)
+    reason: Reason
+    flags: tuple[Reason, ...]
+
+
+def _quote(facts: ExtractedFacts, field: str) -> str:
+    # The validator guarantees a span for every claimed field, so next() always finds one.
+    return next(s.text for s in facts.quoted_spans if s.field == field)
+
+
+def compute_safety(facts: ExtractedFacts, unverified: frozenset[str]) -> SafetyResult:
+    """Safety level 0-2 from the hazard reading, plus flags for unclear or claimed-only harm."""
+    # §4.4, Safety G1: safety is independent of tier, so taxonomy_match is never read.
+    flags: list[str] = []
+    if facts.hazard_status == "described":
+        quote = _quote(facts, "hazard")
+        # Safety G3: active is a full override; conditional is elevated only.
+        if facts.mechanism_type == "active":
+            level, reason = 2, f"Active hazard described: '{quote}' — full override"
+        else:
+            level, reason = 1, f"Conditional hazard described: '{quote}' — elevated, does not bypass active hazards"
+        # D3: a described pathway always wins, so harm_claimed adds no G5 flag (§4.5).
+    elif facts.hazard_status == "unclear":
+        quote = _quote(facts, "hazard")
+        # §4.5 / invariant 8: unclear errs high to conditional. Self-mitigation is not a field,
+        # so avoidance ("we avoid that spot") can't lower it.
+        level, reason = 1, f"Unclear hazard: '{quote}' — treated as conditional"
+        # D3: the unclear flag already sends it to a human, so harm_claimed adds no G5 flag.
+        flags.append(UNCLEAR_HAZARD.format(quote=quote))
+    else:
+        level, reason = 0, NO_HAZARD
+        # Safety G5: a harm claim with no pathway is checked, never trusted or dismissed. D1: the
+        # flag fires even if the harm quote is unverified, since dropping it would lower the outcome.
+        if facts.harm_claimed:
+            flags.append(
+                f"Safety claim — unconfirmed: '{_quote(facts, 'harm_claimed')}' — fast human check, no override"
+            )
+    # D1 (invariant 8): an unverified hazard quote never lowers the level; a human checks it.
+    if level > 0 and "hazard" in unverified:
+        flags.append(UNVERIFIED_HAZARD)
+    return SafetyResult(level=level, reason=reason, flags=tuple(flags))

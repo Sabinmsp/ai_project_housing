@@ -11,7 +11,11 @@ from triage.evaluation import (
     SIGN,
     UNVERIFIED_ALTERNATIVE,
     UNVERIFIED_SIGN,
+    NO_HAZARD,
+    UNCLEAR_HAZARD,
+    UNVERIFIED_HAZARD,
     TallyResult,
+    compute_safety,
     compute_tally,
     lookup_tier,
 )
@@ -106,19 +110,36 @@ STOVE = "stove or oven not working"  # dangerous
 SPAN_FIELDS = ["taxonomy_match", "alternative_mentioned", "coping_mentioned", "fault_or_sign"]
 
 
-def facts(names: list[str], alternative: bool = False, coping: bool = False, sign: bool = False) -> ExtractedFacts:
-    spans = [("taxonomy_match", names)] if names else []
-    spans += [(f, on) for f, on in [("alternative_mentioned", alternative), ("coping_mentioned", coping), ("fault_or_sign", sign)]]
+Hazard = tuple[str, str | None, str] | None  # (hazard_status, mechanism_type, quote)
+
+
+def facts(
+    names: list[str],
+    alternative: bool = False,
+    coping: bool = False,
+    sign: bool = False,
+    hazard: Hazard = None,
+    harm: str | None = None,  # harm quote
+) -> ExtractedFacts:
+    spans = [{"field": "taxonomy_match", "text": "quoted"}] if names else []
+    spans += [{"field": f, "text": "quoted"} for f, on in
+              [("alternative_mentioned", alternative), ("coping_mentioned", coping), ("fault_or_sign", sign)] if on]
+    status, mechanism, hazard_quote = hazard or ("none", None, "")
+    if status != "none":
+        spans.append({"field": "hazard", "text": hazard_quote})
+    if harm:
+        spans.append({"field": "harm_claimed", "text": harm})
     return ExtractedFacts.model_validate({
         "taxonomy_match": names,
         "alternative_mentioned": alternative,
         "coping_mentioned": coping,
-        "hazard_status": "none",
-        "harm_claimed": False,
+        "hazard_status": status,
+        "mechanism_type": mechanism,
+        "harm_claimed": harm is not None,
         "fault_or_sign": "sign" if sign else "fault",
         "claim_mismatch": None,
         "worsening_mentioned": False,
-        "quoted_spans": [{"field": f, "text": "quoted"} for f, on in spans if on],
+        "quoted_spans": spans,
     })
 
 
@@ -213,3 +234,97 @@ def test_tally_in_range_whenever_tier_set(
         assert result.tally is None
     else:
         assert result.tally in {2, 3, 4}
+
+
+# --- compute_safety: §4.5 table and grounds examples --------------------------
+
+LIGHT = "water dripping through the light fitting"
+WIRE = "wire hanging, hasn't touched water"
+CEILING = "sagging ceiling, we avoid that spot"
+ELECTROCUTE = "this tap's gonna electrocute the kids"
+
+
+def test_described_active_is_2() -> None:
+    result = compute_safety(facts([], hazard=("described", "active", LIGHT)), frozenset())
+    assert result.level == 2
+    assert result.reason == f"Active hazard described: '{LIGHT}' — full override"
+    assert result.flags == ()
+
+
+def test_described_conditional_is_1() -> None:
+    result = compute_safety(facts([], hazard=("described", "conditional", WIRE)), frozenset())
+    assert (result.level, result.flags) == (1, ())
+    assert f"'{WIRE}'" in result.reason
+
+
+def test_unclear_is_1_and_flagged_despite_self_mitigation() -> None:
+    # "we avoid that spot" is self-mitigation: never a field, so it can't lower the gate.
+    result = compute_safety(facts([], hazard=("unclear", None, CEILING)), frozenset())
+    assert result.level == 1
+    assert result.reason == f"Unclear hazard: '{CEILING}' — treated as conditional"
+    assert result.flags == (f"Possible hazard — needs a direct look: '{CEILING}'",)
+    assert f"'{CEILING}'" in result.flags[0]
+
+
+def test_harm_claim_without_pathway_is_0_with_g5_flag() -> None:
+    result = compute_safety(facts([TAP], harm=ELECTROCUTE), frozenset())
+    assert (result.level, result.reason) == (0, NO_HAZARD)
+    assert len(result.flags) == 1 and "Safety claim — unconfirmed" in result.flags[0]
+    assert f"'{ELECTROCUTE}'" in result.flags[0]
+
+
+def test_urgent_tone_without_harm_is_0_no_flag() -> None:
+    # "tap's the most urgent thing": tone only (Safety G2), no harm named.
+    result = compute_safety(facts([TAP]), frozenset())
+    assert (result.level, result.reason, result.flags) == (0, NO_HAZARD, ())
+
+
+def test_unclear_with_harm_has_only_the_unclear_flag() -> None:
+    result = compute_safety(facts([], hazard=("unclear", None, CEILING), harm=ELECTROCUTE), frozenset())
+    assert (result.level, result.flags) == (1, (UNCLEAR_HAZARD.format(quote=CEILING),))
+
+
+def test_described_with_harm_has_no_g5_flag() -> None:
+    result = compute_safety(facts([], hazard=("described", "active", LIGHT), harm=ELECTROCUTE), frozenset())
+    assert (result.level, result.flags) == (2, ())
+
+
+def test_unverified_hazard_keeps_level_and_flags() -> None:
+    result = compute_safety(facts([], hazard=("described", "active", LIGHT)), frozenset({"hazard"}))
+    assert (result.level, result.flags) == (2, (UNVERIFIED_HAZARD,))
+
+
+def test_unverified_harm_still_fires_g5() -> None:
+    result = compute_safety(facts([TAP], harm=ELECTROCUTE), frozenset({"harm_claimed"}))
+    assert result.level == 0 and len(result.flags) == 1
+
+
+# --- compute_safety: properties ----------------------------------------------
+
+hazards = st.sampled_from([None, ("described", "active", LIGHT), ("described", "conditional", WIRE),
+                           ("unclear", None, CEILING)])
+harms = st.sampled_from([None, ELECTROCUTE])
+safety_unverified = st.frozensets(st.sampled_from(["hazard", "harm_claimed", "taxonomy_match"]))
+
+
+@given(matches, hazards, harms, safety_unverified)
+def test_safety_independent_of_taxonomy_match(match: list[str], hazard: Hazard, harm: str | None, unverified: frozenset[str]) -> None:
+    names = list(dict.fromkeys(match))
+    assert compute_safety(facts(names, hazard=hazard, harm=harm), unverified) == compute_safety(
+        facts([], hazard=hazard, harm=harm), unverified
+    )
+
+
+@given(hazards, harms, safety_unverified, st.sampled_from(["hazard", "harm_claimed", "taxonomy_match"]))
+def test_more_unverified_never_lowers_level(
+    hazard: Hazard, harm: str | None, unverified: frozenset[str], extra: str
+) -> None:
+    f = facts([], hazard=hazard, harm=harm)
+    assert compute_safety(f, unverified | {extra}).level >= compute_safety(f, unverified).level
+
+
+@given(hazards, harms, safety_unverified)
+def test_level_2_iff_described_active(hazard: Hazard, harm: str | None, unverified: frozenset[str]) -> None:
+    f = facts([], hazard=hazard, harm=harm)
+    is_active = f.hazard_status == "described" and f.mechanism_type == "active"
+    assert (compute_safety(f, unverified).level == 2) == is_active
