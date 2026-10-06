@@ -15,6 +15,7 @@ MON = datetime(2026, 9, 28, 9, 0, tzinfo=timezone(timedelta(hours=9, minutes=30)
 def enriched(**overrides: Any) -> EnrichedJob:
     fields: dict[str, Any] = {
         "request_id": "R-0000AAAA",
+        "parent_report_id": "R-0000AAAA",
         "community": "Wadeye",
         "original_report_timestamp": MON,
         "tier": "standard",
@@ -105,7 +106,7 @@ def test_end_to_end_order() -> None:
 
 
 @pytest.mark.parametrize(
-    "field", ["tier", "tier_entry", "base_points", "severity_bump", "urgency_tally", "tally_reasons", "safety_level", "safety_reason", "flags"]
+    "field", ["parent_report_id", "tier", "tier_entry", "base_points", "severity_bump", "urgency_tally", "tally_reasons", "safety_level", "safety_reason", "flags"]
 )
 def test_enriched_job_field_without_default_must_be_given(field: str) -> None:
     fields = enriched().model_dump()

@@ -1,0 +1,230 @@
+{
+  "T-01_darwin.pdf": {
+    "base_points": 3,
+    "capacity_block_flag": false,
+    "community": "Darwin",
+    "distance_cost_km": 0.0,
+    "fault_description": "toilet blocked",
+    "flags": [],
+    "next_actionable": null,
+    "original_report_timestamp": "2026-09-28T15:00:00+09:30",
+    "safety_flag": false,
+    "safety_level": "none",
+    "safety_reason": "No hazard mechanism described",
+    "severity_bump": 0,
+    "shared_route_opportunities": [],
+    "spans": [
+      {
+        "field": "taxonomy_match",
+        "text": "toilet blocked",
+        "verified": true
+      },
+      {
+        "field": "fault_description",
+        "text": "toilet blocked",
+        "verified": true
+      },
+      {
+        "field": "alternative_mentioned",
+        "text": "using the other one",
+        "verified": true
+      }
+    ],
+    "starvation_line": null,
+    "tally_reasons": [
+      "Alternative named in report: +0"
+    ],
+    "taxonomy_match": [
+      "blocked or broken toilet"
+    ],
+    "tier": "dangerous",
+    "tier_entry": "blocked or broken toilet",
+    "urgency_tally": 3
+  },
+  "T-02_wadeye.pdf": {
+    "base_points": 3,
+    "capacity_block_flag": false,
+    "community": "Wadeye",
+    "distance_cost_km": 412.0,
+    "fault_description": "toilet blocked",
+    "flags": [],
+    "next_actionable": null,
+    "original_report_timestamp": "2026-09-25T15:00:00+09:30",
+    "safety_flag": false,
+    "safety_level": "none",
+    "safety_reason": "No hazard mechanism described",
+    "severity_bump": 1,
+    "shared_route_opportunities": [],
+    "spans": [
+      {
+        "field": "taxonomy_match",
+        "text": "toilet blocked",
+        "verified": true
+      },
+      {
+        "field": "fault_description",
+        "text": "toilet blocked",
+        "verified": true
+      },
+      {
+        "field": "coping_mentioned",
+        "text": "the servo",
+        "verified": true
+      }
+    ],
+    "starvation_line": null,
+    "tally_reasons": [
+      "No alternative named \u2014 no-redundancy default: +1"
+    ],
+    "taxonomy_match": [
+      "blocked or broken toilet"
+    ],
+    "tier": "dangerous",
+    "tier_entry": "blocked or broken toilet",
+    "urgency_tally": 4
+  },
+  "T-03_maningrida.pdf": {
+    "base_points": 3,
+    "capacity_block_flag": false,
+    "community": "Maningrida",
+    "distance_cost_km": 510.0,
+    "fault_description": "roof leaking",
+    "flags": [],
+    "next_actionable": null,
+    "original_report_timestamp": "2026-09-29T15:00:00+09:30",
+    "safety_flag": true,
+    "safety_level": "active",
+    "safety_reason": "Active hazard described: 'water coming through the light fitting' \u2014 full override",
+    "severity_bump": 1,
+    "shared_route_opportunities": [],
+    "spans": [
+      {
+        "field": "taxonomy_match",
+        "text": "roof leaking",
+        "verified": true
+      },
+      {
+        "field": "fault_description",
+        "text": "roof leaking",
+        "verified": true
+      },
+      {
+        "field": "hazard",
+        "text": "water coming through the light fitting",
+        "verified": true
+      }
+    ],
+    "starvation_line": null,
+    "tally_reasons": [
+      "No alternative named \u2014 no-redundancy default: +1"
+    ],
+    "taxonomy_match": [
+      "roof leak"
+    ],
+    "tier": "dangerous",
+    "tier_entry": "roof leak",
+    "urgency_tally": 4
+  },
+  "T-04_galiwinku.pdf": {
+    "base_points": 3,
+    "capacity_block_flag": false,
+    "community": "Galiwinku",
+    "distance_cost_km": 560.0,
+    "fault_description": "no hot water",
+    "flags": [],
+    "next_actionable": null,
+    "original_report_timestamp": "2026-09-27T15:00:00+09:30",
+    "safety_flag": false,
+    "safety_level": "none",
+    "safety_reason": "No hazard mechanism described",
+    "severity_bump": 1,
+    "shared_route_opportunities": [],
+    "spans": [
+      {
+        "field": "taxonomy_match",
+        "text": "no hot water",
+        "verified": true
+      },
+      {
+        "field": "fault_description",
+        "text": "no hot water",
+        "verified": true
+      }
+    ],
+    "starvation_line": null,
+    "tally_reasons": [
+      "No alternative named \u2014 no-redundancy default: +1"
+    ],
+    "taxonomy_match": [
+      "hot water system not working"
+    ],
+    "tier": "dangerous",
+    "tier_entry": "hot water system not working",
+    "urgency_tally": 4
+  },
+  "T-05_wadeye.pdf": {
+    "base_points": null,
+    "capacity_block_flag": false,
+    "community": "Wadeye",
+    "distance_cost_km": 412.0,
+    "fault_description": "the ceiling fan wobbles and makes a noise",
+    "flags": [],
+    "next_actionable": null,
+    "original_report_timestamp": "2026-09-26T15:00:00+09:30",
+    "safety_flag": false,
+    "safety_level": "none",
+    "safety_reason": "No hazard mechanism described",
+    "severity_bump": null,
+    "shared_route_opportunities": [],
+    "spans": [
+      {
+        "field": "fault_description",
+        "text": "the ceiling fan wobbles and makes a noise",
+        "verified": true
+      }
+    ],
+    "starvation_line": null,
+    "tally_reasons": [],
+    "taxonomy_match": [],
+    "tier": null,
+    "tier_entry": null,
+    "urgency_tally": null
+  },
+  "T-06_darwin.pdf": {
+    "base_points": 3,
+    "capacity_block_flag": false,
+    "community": "Darwin",
+    "distance_cost_km": 0.0,
+    "fault_description": "toilet blocked",
+    "flags": [],
+    "next_actionable": null,
+    "original_report_timestamp": "2026-09-24T15:00:00+09:30",
+    "safety_flag": false,
+    "safety_level": "none",
+    "safety_reason": "No hazard mechanism described",
+    "severity_bump": 1,
+    "shared_route_opportunities": [],
+    "spans": [
+      {
+        "field": "taxonomy_match",
+        "text": "toilet blocked",
+        "verified": true
+      },
+      {
+        "field": "fault_description",
+        "text": "toilet blocked",
+        "verified": true
+      }
+    ],
+    "starvation_line": null,
+    "tally_reasons": [
+      "No alternative named \u2014 no-redundancy default: +1"
+    ],
+    "taxonomy_match": [
+      "blocked or broken toilet"
+    ],
+    "tier": "dangerous",
+    "tier_entry": "blocked or broken toilet",
+    "urgency_tally": 4
+  }
+}

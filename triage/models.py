@@ -252,6 +252,9 @@ class EnrichedJob(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     request_id: str
+    # The report this job came from. No default: a compound report gives several jobs, and each
+    # must say which report it belongs to (tenant_id and source_tag live on that Report).
+    parent_report_id: str
     community: str
     original_report_timestamp: datetime
     fault_description: Optional[str] = None

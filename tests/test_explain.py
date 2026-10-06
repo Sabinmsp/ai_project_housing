@@ -23,6 +23,7 @@ ACTIVE_REASON = "Active hazard described: 'water coming through the light fittin
 def panel_d_job(**overrides: Any) -> EnrichedJob:
     fields: dict[str, Any] = {
         "request_id": "R-2291",
+        "parent_report_id": "R-2291",
         "community": "Wadeye",
         "original_report_timestamp": datetime.fromtimestamp(1726041600, tz=timezone.utc),
         "fault_description": "roof leaking",
@@ -49,6 +50,7 @@ def panel_d_job(**overrides: Any) -> EnrichedJob:
 def standard_job(request_id: str, **overrides: Any) -> EnrichedJob:
     fields: dict[str, Any] = {
         "request_id": request_id,
+        "parent_report_id": request_id,
         "community": "Darwin",
         "original_report_timestamp": MON,
         "tier": "standard",

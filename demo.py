@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 from triage.extraction import LLMClient, OfflineExtractor, OpenAICompatibleClient, extract
-from triage.intake import DuplicateRequestError, SQLiteReportRepository
+from triage.intake import DuplicateRequestError, SQLiteReportRepository, new_request_id
 from triage.models import EnrichedJob, ExtractionStatus, ReportExtraction, VerifiedSpan
 from triage.adapter import to_rank_input
 from triage.evaluation import evaluate
@@ -31,7 +31,7 @@ _STANDIN_DISTANCE = {"Wadeye": 412, "Maningrida": 510, "Darwin": 0, "Galiwinku":
 _SAFETY_LEVEL_NAMES = ("none", "conditional", "active")  # index = safety level
 
 
-def _standin_stages_3_to_5(report, facts) -> EnrichedJob:
+def _standin_stages_3_to_5(report, facts, job_id: str | None = None, extra_flags: tuple[str, ...] = ()) -> EnrichedJob:
     unverified = verify_spans(report.raw_text, facts)
     # Spans that back no claim (e.g. impact_status quoting "ongoing") are left out entirely.
     spans = [VerifiedSpan(field=s.field, text=s.text, verified=(s.field, s.text) not in unverified)
@@ -42,7 +42,9 @@ def _standin_stages_3_to_5(report, facts) -> EnrichedJob:
     ev = evaluate(facts, unverified)
     level = _SAFETY_LEVEL_NAMES[ev.safety.level]
     return EnrichedJob(
-        request_id=report.request_id, community=report.community,
+        request_id=job_id or report.request_id, parent_report_id=report.request_id,
+        community=report.community,
+        # Invariant 6: every job from a report keeps the report's intake timestamp (FIFO).
         original_report_timestamp=report.original_report_timestamp,
         fault_description=facts.fault_description, taxonomy_match=facts.taxonomy_match,
         spans=spans, distance_cost_km=_STANDIN_DISTANCE.get(report.community),
@@ -50,16 +52,31 @@ def _standin_stages_3_to_5(report, facts) -> EnrichedJob:
         base_points=ev.tally.base, severity_bump=ev.tally.bump,
         urgency_tally=ev.tally.tally, tally_reasons=ev.tally.reasons,
         safety_flag=(level == "active"), safety_level=level, safety_reason=ev.safety.reason,
-        flags=ev.flags,
+        flags=(*ev.flags, *extra_flags),
     )
 
 
+def _duplicate_flags(faults) -> list[tuple[str, ...]]:
+    """Per fault, a flag for each taxonomy entry another fault in the same report also matched."""
+    flags = []
+    for i, facts in enumerate(faults):
+        others = {name for j, f in enumerate(faults) if j != i for name in f.taxonomy_match}
+        # Flag, never merge: two entries may really be two faults, and a merge could drop one.
+        flags.append(tuple(
+            f'Possible duplicate: this report has two entries for "{name}". Check before dispatching both.'
+            for name in dict.fromkeys(facts.taxonomy_match) if name in others
+        ))
+    return flags
+
+
 def _standin_jobs(report, extraction: ReportExtraction) -> list[EnrichedJob]:
-    """One job per fault. [] (no fault named) never gets here: extract() routes it out of scope."""
-    if len(extraction.faults) > 1:
-        # Raise rather than drop: a silently lost second fault could be the hazard.
-        raise NotImplementedError("compound reports split into jobs in step 3.5")
-    return [_standin_stages_3_to_5(report, facts) for facts in extraction.faults]
+    """One job per fault, none dropped or merged. [] never gets here: extract() routes it out of scope."""
+    faults = extraction.faults
+    # One fault keeps the report's id. In a compound report every job gets its own id, so none
+    # is mistaken for the report itself; parent_report_id links them back.
+    ids = [report.request_id] if len(faults) == 1 else [new_request_id() for _ in faults]
+    return [_standin_stages_3_to_5(report, facts, job_id, dups)
+            for facts, job_id, dups in zip(faults, ids, _duplicate_flags(faults))]
 # --------------------------------------------------------------------------
 
 
