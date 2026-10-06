@@ -13,4 +13,4 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt
       - run: pytest -q
-      - run: python demo.py
+      - run: python demo.py --offline

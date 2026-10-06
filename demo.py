@@ -17,6 +17,7 @@ from triage.intake import DuplicateRequestError, SQLiteReportRepository, new_req
 from triage.models import EnrichedJob, ExtractionStatus, ReportExtraction, VerifiedSpan
 from triage.adapter import to_rank_input
 from triage.evaluation import evaluate
+from triage.recording import RECORDED_DIR, RecordedClient, RecordingClient
 from triage.verification import claim_spans, verify_spans
 from triage.explain import build_traces, render_coordinator, render_review_entry, render_tenant_sms
 from triage.ranking import rank
@@ -80,6 +81,33 @@ def _standin_jobs(report, extraction: ReportExtraction) -> list[EnrichedJob]:
 # --------------------------------------------------------------------------
 
 
+def _choose_client(offline: bool, record: bool) -> LLMClient:
+    """Offline double, live model, recorded replay, or live-and-record; prints the mode first."""
+    if offline:
+        print("MODE: offline. OFFLINE STAND-IN: regex test double, not the real extractor. "
+              "Dialect handling requires the LLM path (master §3.2.3).")
+        return OfflineExtractor()
+    _load_dotenv()
+    has_key = bool(os.environ.get("TRIAGE_API_KEY") or os.environ.get("OPENAI_API_KEY"))
+    if record:
+        if not has_key:
+            sys.exit("--record needs TRIAGE_API_KEY or OPENAI_API_KEY (environment or .env).")
+        live = OpenAICompatibleClient()
+        print(f"MODE: live {live.model}, recording every response to {RECORDED_DIR} — paid API calls.")
+        return RecordingClient(live, RECORDED_DIR)
+    if has_key:
+        live = OpenAICompatibleClient()
+        print(f"MODE: live {live.model} — paid API calls. Use --offline for the regex test double.")
+        return live
+    # No key: replay real recorded answers. A miss is flagged for a human, never sent to the
+    # regex double, which would pass a test double's guess off as the model's reading.
+    recorded = RecordedClient(RECORDED_DIR)
+    when = recorded.recorded_on or "none match the current prompt"
+    print(f"MODE: recorded {recorded.model} responses (recorded {when}) — no API calls. "
+          "Set OPENAI_API_KEY to read new reports live.")
+    return recorded
+
+
 def _load_dotenv(path: Path = Path(__file__).with_name(".env")) -> None:
     """Read KEY=value lines from .env (git-ignored). Real env vars win."""
     if not path.exists():
@@ -102,23 +130,17 @@ def _one_line(text: str) -> str:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Run the triage pipeline on a folder of reports.")
     parser.add_argument("folder", nargs="?", type=Path, default=REPORTS_DIR)
-    parser.add_argument("--live", action="store_true", help="use the real LLM (paid API calls); default is offline")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--offline", action="store_true",
+                       help="regex test double; never builds the API client (CI, local gate)")
+    modes.add_argument("--record", action="store_true",
+                       help=f"live run that also saves every response to {RECORDED_DIR.name}/ (needs a key)")
     args = parser.parse_args(argv)
     folder = args.folder
     if not folder.is_dir():
         sys.exit(f"Report folder not found: {folder}")
     repo = SQLiteReportRepository()
-    # Offline unless --live: a key in .env must never turn a routine run into paid API calls.
-    if args.live:
-        _load_dotenv()
-        if not (os.environ.get("TRIAGE_API_KEY") or os.environ.get("OPENAI_API_KEY")):
-            sys.exit("--live needs TRIAGE_API_KEY or OPENAI_API_KEY (environment or .env).")
-        client: LLMClient = OpenAICompatibleClient()
-        print(f"MODE: live LLM ({client.name}) — paid API calls.")
-    else:
-        client = OfflineExtractor()
-        print("MODE: offline. OFFLINE STAND-IN: regex test double, not the real extractor. "
-              "Dialect handling requires the LLM path (master §3.2.3). Use --live for the LLM.")
+    client = _choose_client(args.offline, args.record)
 
     # ---- STAGE 1: intake ---------------------------------------------------
     reports, skipped = load_reports(folder)
@@ -164,8 +186,10 @@ def main(argv: list[str] | None = None) -> None:
             print(f"  alternative_mentioned={f.alternative_mentioned}  "
                   f"coping_mentioned={f.coping_mentioned}  impact_status={f.impact_status}")
             print(f"  hazard_status: {f.hazard_status}  mechanism_type={f.mechanism_type}")
+            claims = {(s.field, s.text) for s in claim_spans(f)}
             for span in f.quoted_spans:
-                print(f"  quote [{span.field}]: {span.text!r}")
+                shown = repr(span.text) if (span.field, span.text) in claims else "(ignored — backs no claim)"
+                print(f"  quote [{span.field}]: {shown}")
         if res.status is ExtractionStatus.OK:
             extracted.append((report, res.extraction))
         else:

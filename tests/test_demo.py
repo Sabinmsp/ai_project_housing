@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 import demo
-from triage import evaluation, extraction
+from triage import evaluation, extraction, recording
 from triage.adapter import to_rank_input
 from triage.evaluation import Evaluation, evaluate
 from triage.extraction import OfflineExtractor
@@ -14,6 +14,19 @@ from triage.models import EnrichedJob, ExtractedFacts, Report, ReportExtraction
 from triage.ranking import rank
 from triage.report_files import parse_report_text, read_text
 from triage.verification import verify_spans
+
+
+@pytest.fixture(autouse=True)
+def no_real_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test reads .env or builds the real API client; a test that needs "live" swaps in a fake."""
+    monkeypatch.setattr(demo, "_load_dotenv", lambda *args, **kwargs: None)
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("TRIAGE_API_KEY", "")
+
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise AssertionError("real API client constructed in a test")
+    monkeypatch.setattr(demo, "OpenAICompatibleClient", refuse)
+    monkeypatch.setattr(extraction, "OpenAICompatibleClient", refuse)
 
 
 def test_stub_takes_base_and_bump_from_evaluation_not_reason_text(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -97,46 +110,6 @@ def test_stub_ignores_a_span_that_backs_no_claim() -> None:
         ("fault_description", "toilet blocked", True),
         ("taxonomy_match", "toilet blocked", True),
     ]  # the "ongoing" span is absent, not listed as unverified
-
-
-
-# --- offline by default: no API client without --live --------------------------------
-
-
-def _forbid_api_client(monkeypatch: pytest.MonkeyPatch) -> None:
-    def refuse(*args: object, **kwargs: object) -> None:
-        raise AssertionError("API client constructed without --live")
-    monkeypatch.setattr(extraction, "OpenAICompatibleClient", refuse)
-    monkeypatch.setattr(demo, "OpenAICompatibleClient", refuse)
-
-
-def test_demo_without_live_never_builds_the_api_client(monkeypatch: pytest.MonkeyPatch,
-                                                       capsys: pytest.CaptureFixture[str]) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-a-real-key")
-    _forbid_api_client(monkeypatch)
-    demo.main([])
-    out = capsys.readouterr().out
-    assert out.startswith("MODE: offline")
-    assert "extractor: offline" in out
-
-
-def test_demo_live_uses_the_api_client(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    class FakeLive(OfflineExtractor):  # answers like the offline reader; no network
-        name = "llm:fake"
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-a-real-key")
-    monkeypatch.setattr(demo, "OpenAICompatibleClient", FakeLive)
-    demo.main(["--live"])
-    out = capsys.readouterr().out
-    assert out.startswith("MODE: live LLM (llm:fake)")
-    assert "extractor: llm:fake" in out
-
-
-def test_demo_live_without_key_exits(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "")
-    monkeypatch.setenv("TRIAGE_API_KEY", "")
-    _forbid_api_client(monkeypatch)
-    with pytest.raises(SystemExit, match="--live needs"):
-        demo.main(["--live"])
 
 
 
@@ -242,3 +215,131 @@ def test_children_rank_on_their_own_merits_tie_broken_by_job_id(order: tuple[Ext
     # Same safety, tally and timestamp: job_id decides, never the order the faults were listed.
     assert [e.job_id for e in result.ranked] == sorted(j.request_id for j in jobs)
     assert result.ranked[1].decided_by == "identical; order arbitrary but fixed"
+
+
+
+# --- run modes: offline / live / recorded / record ------------------------------------
+
+def write_reports(folder: Path, *messages: str) -> Path:
+    folder.mkdir()
+    for i, message in enumerate(messages, start=1):
+        (folder / f"R{i}.txt").write_text(
+            f"Tenant ID: T-{i}\nCommunity: Darwin\nSource: tenant_direct\n"
+            f"Reported: 2026-09-2{i} 15:00\nMessage: {message}\n", encoding="utf-8")
+    return folder
+
+
+def write_recording(store: Path, raw_text: str, response: str, prompt: str | None = None) -> None:
+    store.mkdir(exist_ok=True)
+    record = {"model": "gpt-4o", "recorded_at": "2026-10-06",
+              "prompt_hash": prompt or recording.prompt_hash(), "response": response}
+    recording.recording_path(raw_text, store).write_text(json.dumps(record), encoding="utf-8")
+
+
+def forbid_offline_double(monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise AssertionError("regex double used outside --offline")
+    monkeypatch.setattr(OfflineExtractor, "complete_json", refuse)
+
+
+class FakeLive(OfflineExtractor):
+    """Stands in for the API client: answers like the offline reader, no network."""
+    name = "llm:fake"
+    model = "gpt-4o-fake"
+
+
+@pytest.fixture
+def store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    path = tmp_path / "recorded"
+    monkeypatch.setattr(demo, "RECORDED_DIR", path)
+    return path
+
+
+def test_no_key_replays_recording_and_flags_the_miss(tmp_path: Path, store: Path, monkeypatch: pytest.MonkeyPatch,
+                                                     capsys: pytest.CaptureFixture[str]) -> None:
+    folder = write_reports(tmp_path / "reports", "toilet blocked", "stove's not working")
+    write_recording(store, "toilet blocked", OfflineExtractor.read("toilet blocked").model_dump_json())
+    forbid_offline_double(monkeypatch)
+    demo.main([str(folder)])
+    out = capsys.readouterr().out
+    assert out.startswith("MODE: recorded gpt-4o responses (recorded 2026-10-06) — no API calls.")
+    assert out.count("status=ok") == 1  # the recorded report
+    assert out.count("status=flagged_for_human") == 1  # the miss; the run carried on
+    assert recording.MISS in out
+
+
+def test_recording_from_an_older_prompt_is_a_miss(tmp_path: Path, store: Path, monkeypatch: pytest.MonkeyPatch,
+                                                  capsys: pytest.CaptureFixture[str]) -> None:
+    folder = write_reports(tmp_path / "reports", "toilet blocked")
+    write_recording(store, "toilet blocked", OfflineExtractor.read("toilet blocked").model_dump_json(), prompt="old")
+    forbid_offline_double(monkeypatch)
+    demo.main([str(folder)])
+    out = capsys.readouterr().out
+    assert "status=flagged_for_human" in out and "recorded under an older prompt" in out
+    assert "status=ok" not in out
+
+
+def test_invalid_recorded_response_is_flagged_like_a_live_one(tmp_path: Path, store: Path,
+                                                              capsys: pytest.CaptureFixture[str]) -> None:
+    folder = write_reports(tmp_path / "reports", "toilet blocked")
+    write_recording(store, "toilet blocked", '{"faults": [{"fault_description": null}]}')
+    demo.main([str(folder)])
+    out = capsys.readouterr().out
+    assert "status=flagged_for_human  attempts=2" in out
+    assert "ValidationError" in out
+
+
+def test_key_present_goes_live_and_never_reads_recordings(tmp_path: Path, store: Path,
+                                                          monkeypatch: pytest.MonkeyPatch,
+                                                          capsys: pytest.CaptureFixture[str]) -> None:
+    folder = write_reports(tmp_path / "reports", "toilet blocked")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-a-real-key")
+    monkeypatch.setattr(demo, "OpenAICompatibleClient", FakeLive)
+
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise AssertionError("recordings read in live mode")
+    monkeypatch.setattr(demo, "RecordedClient", refuse)
+    demo.main([str(folder)])
+    out = capsys.readouterr().out
+    assert out.startswith("MODE: live gpt-4o-fake — paid API calls.")
+    assert "extractor: llm:fake" in out and "status=ok" in out
+
+
+def test_offline_flag_with_key_never_builds_the_api_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                           capsys: pytest.CaptureFixture[str]) -> None:
+    folder = write_reports(tmp_path / "reports", "toilet blocked")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-a-real-key")
+    demo.main(["--offline", str(folder)])  # the autouse guard raises if the API client is built
+    out = capsys.readouterr().out
+    assert out.startswith("MODE: offline") and "extractor: offline" in out
+
+
+def test_record_writes_one_file_per_report(tmp_path: Path, store: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    messages = ("toilet blocked", "stove's not working")
+    folder = write_reports(tmp_path / "reports", *messages)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-a-real-key")
+    monkeypatch.setattr(demo, "OpenAICompatibleClient", FakeLive)
+    demo.main(["--record", str(folder)])
+    assert sorted(p.name for p in store.iterdir()) == sorted(recording.recording_path(m, store).name for m in messages)
+    for message in messages:
+        record = json.loads(recording.recording_path(message, store).read_text(encoding="utf-8"))
+        assert record["prompt_hash"] == recording.prompt_hash()
+        assert record["model"] == "gpt-4o-fake"
+        assert ReportExtraction.model_validate_json(record["response"]) == OfflineExtractor.read(message)
+
+
+def test_record_without_key_exits(store: Path) -> None:
+    with pytest.raises(SystemExit, match="--record needs"):
+        demo.main(["--record"])
+
+
+def test_stage2_marks_a_span_that_backs_no_claim(tmp_path: Path, store: Path,
+                                                capsys: pytest.CaptureFixture[str]) -> None:
+    folder = write_reports(tmp_path / "reports", "toilet blocked")
+    answer = json.loads(OfflineExtractor.read("toilet blocked").model_dump_json())
+    answer["faults"][0]["quoted_spans"].append({"field": "impact_status", "text": "ongoing"})
+    write_recording(store, "toilet blocked", json.dumps(answer))
+    demo.main([str(folder)])
+    out = capsys.readouterr().out
+    assert "quote [impact_status]: (ignored — backs no claim)" in out
+    assert "'ongoing'" not in out

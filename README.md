@@ -40,11 +40,20 @@ Model reads, code decides: the only model call is in Stage 2, and nothing it ret
 ```bash
 pip install -r requirements.txt
 pytest -q                  # includes Hypothesis property tests
-python demo.py             # ranks every report in reports/
+python demo.py             # ranks every report in reports/ — no key needed (recorded mode)
 python demo.py some/folder # or any other folder
 ```
 
-To use a real model, set `TRIAGE_API_KEY` (or `OPENAI_API_KEY`), and optionally `TRIAGE_MODEL` and `TRIAGE_BASE_URL` for any OpenAI-compatible endpoint (OpenRouter and LiteLLM proxy work). `demo.py` runs offline (the keyword reader) unless you pass `--live`; only then does it read these from the environment or a git-ignored `.env` file.
+`demo.py` prints its mode first. It picks one of four:
+
+| Mode | When | What reads the reports |
+|---|---|---|
+| **recorded** | no API key (the default reproduction) | real gpt-4o answers saved in `data/recorded/`, replayed with no API calls. A report with no recording, or one recorded under an older prompt, is flagged "Needs the live model" — never guessed. |
+| **live** | a key is set (environment or `.env`) | the real model, gpt-4o by default (`TRIAGE_MODEL` overrides). Paid API calls. |
+| **record** | `--record` (needs a key) | live, and saves every response to `data/recorded/` for future recorded runs. |
+| **offline** | `--offline` | a regex test double, never the API. Used by CI and the local gate; not the real extractor. |
+
+Recorded answers go through the same validation as live ones. For a live run, set `TRIAGE_API_KEY` (or `OPENAI_API_KEY`), and optionally `TRIAGE_MODEL` and `TRIAGE_BASE_URL` for any OpenAI-compatible endpoint (OpenRouter and LiteLLM proxy work), in the environment or a git-ignored `.env` file.
 
 ## Adding a report
 

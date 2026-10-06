@@ -136,6 +136,14 @@ def build_user_prompt(raw_text: str, fault_names: tuple[str, ...] = FAULT_NAMES)
     return f"FAULT LIST:\n{faults}\n\nREPORT TEXT:\n<<<\n{raw_text}\n>>>"
 
 
+def report_text_from_prompt(user: str) -> str:
+    """The report text inside a message built by build_user_prompt."""
+    m = re.search(r"REPORT TEXT:\n<<<\n(.*)\n>>>", user, re.S)
+    if m is None:
+        raise ValueError("user prompt has no REPORT TEXT block")
+    return m.group(1)
+
+
 class LLMClient(Protocol):
     name: str
 
@@ -283,9 +291,7 @@ class OfflineExtractor:
     name = "offline"
 
     def complete_json(self, system: str, user: str, schema: dict) -> str:
-        m = re.search(r"REPORT TEXT:\n<<<\n(.*)\n>>>", user, re.S)
-        text = m.group(1) if m else ""
-        return self.read(text).model_dump_json()
+        return self.read(report_text_from_prompt(user)).model_dump_json()
 
     @staticmethod
     def read(text: str) -> ReportExtraction:
