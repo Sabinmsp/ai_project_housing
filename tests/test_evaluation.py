@@ -509,4 +509,14 @@ def test_tally_reports_base_and_bump(names: list[str], kw: dict[str, bool], expe
 ])
 def test_tally_result_parts_must_add_up(fields: dict[str, int | None]) -> None:
     with pytest.raises(ValueError):
-        TallyResult(**fields, reasons=(), flags=())
+        TallyResult(**fields, winner=TOILET if fields["tally"] else None, reasons=(), flags=())
+
+
+@pytest.mark.parametrize("names, winner", [([TOILET], TOILET), ([TAP, ELEMENT], ELEMENT), ([DRAIN, SEWAGE], DRAIN), ([], None)])
+def test_tally_names_the_winning_entry(names: list[str], winner: str | None) -> None:
+    assert tally(names).winner == winner
+
+
+def test_tally_without_winner_rejected() -> None:
+    with pytest.raises(ValueError, match="name the fault"):
+        TallyResult(tally=4, base=3, bump=1, winner=None, reasons=(), flags=())

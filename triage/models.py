@@ -13,6 +13,8 @@ from typing import Annotated, Literal, Optional
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from triage.tiers import TIER_TABLE
+
 # Invariant 7: pattern is a regex search, so r"\S" requires at least one non-space character.
 Reason = Annotated[str, Field(pattern=r"\S")]
 
@@ -235,6 +237,8 @@ class EnrichedJob(BaseModel):
     # Evaluation output. No defaults: an omission must raise, not read as "no tier" or
     # "no hazard" (same reason as ExtractedFacts).
     tier: Optional[Literal["dangerous", "standard"]]
+    # TIER_TABLE name whose sources back the tier (the candidate that produced the tally).
+    tier_entry: Optional[str]
     base_points: Optional[int] = Field(ge=2, le=3)
     # The +1: removed by an alternative, a sign-only report, or a degraded-by-definition fault.
     severity_bump: Optional[int] = Field(ge=0, le=1)
@@ -258,9 +262,12 @@ class EnrichedJob(BaseModel):
         if self.safety_flag != (self.safety_level == "active"):
             raise ValueError(f"safety_flag={self.safety_flag} disagrees with safety_level={self.safety_level!r}")
         if self.urgency_tally is None:
-            if self.base_points is not None or self.severity_bump is not None:
-                raise ValueError("base_points and severity_bump must be None when urgency_tally is None")
+            if self.base_points is not None or self.severity_bump is not None or self.tier_entry is not None:
+                raise ValueError("base_points, severity_bump and tier_entry must be None when urgency_tally is None")
             return self
+        # The coordinator's tier line cites this entry's sources, so it must back the stated tier.
+        if self.tier_entry not in TIER_TABLE or TIER_TABLE[self.tier_entry].tier != self.tier:
+            raise ValueError(f"tier_entry {self.tier_entry!r} is not a {self.tier} entry in TIER_TABLE")
         if self.tier is None or self.base_points is None or self.severity_bump is None:
             raise ValueError("a scored job must carry its tier, base_points and severity_bump")
         if self.base_points + self.severity_bump != self.urgency_tally:

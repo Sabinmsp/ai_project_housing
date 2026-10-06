@@ -6,8 +6,8 @@ from pydantic import BaseModel, ConfigDict
 from triage.adapter import to_rank_input
 from triage.models import EnrichedJob, RankedJob, RankResult, Reason, VerifiedSpan
 from triage.ranking import REVIEW_BAND_REASON
+from triage.tiers import TIER_TABLE
 
-TIER_SOURCE = "NT Government published fault list"
 
 
 class ReasoningTrace(BaseModel):
@@ -20,6 +20,7 @@ class ReasoningTrace(BaseModel):
     taxonomy_match: tuple[str, ...]
     # None: untiered safety job, ranked but awaiting a tier call (invariant 6).
     tier: Literal["dangerous", "standard"] | None
+    tier_entry: str | None
     base_points: int | None
     severity_bump: int | None
     tally_reasons: tuple[Reason, ...]
@@ -64,6 +65,7 @@ def build_trace(entry: RankedJob, job: EnrichedJob, queue_length: int) -> Reason
         fault_description=_verified_fault_text(job),
         taxonomy_match=tuple(job.taxonomy_match),
         tier=job.tier,
+        tier_entry=job.tier_entry,
         base_points=job.base_points,
         severity_bump=job.severity_bump,
         tally_reasons=job.tally_reasons,
@@ -94,12 +96,23 @@ def render_tenant_sms(trace: ReasoningTrace) -> str:
     lines = [f'Housing repair {trace.job_id}: we have your report about "{fault}".']
     if trace.safety_level > 0:
         lines.append("It is marked as a safety job.")
+    # No source names or tier labels: plain words the tenant can act on.
     if trace.tier is None:
         lines.append("A coordinator is confirming its priority.")
+    elif trace.tier == "dangerous":
+        lines.append("It's being treated as an urgent repair.")
     else:
-        lines.append(f"It is classed {trace.tier} on the {TIER_SOURCE}.")
+        lines.append("It's being treated as a general repair.")
     lines.append(f"Reply with {trace.job_id} if things get worse.")
     return " ".join(lines)
+
+
+def _source_text(source: str, tier: str) -> str:
+    if source == "nt.gov.au":
+        return "nt.gov.au — " + ("on the repaired-first list" if tier == "dangerous" else "general repairs list")
+    if source.startswith("RTA "):
+        return f"NT Residential Tenancies Act {source.removeprefix('RTA ')} — emergency repair"
+    raise ValueError(f"unknown tier source: {source!r}")
 
 
 def _table(rows: list[tuple[str, str, str]]) -> str:
@@ -109,12 +122,15 @@ def _table(rows: list[tuple[str, str, str]]) -> str:
 
 def render_coordinator(trace: ReasoningTrace) -> str:
     rows = [("job_id", trace.job_id, "")]
-    rows += [("taxonomy_match", m, "(NT fault list name)") for m in trace.taxonomy_match]
+    rows += [("taxonomy_match", m, "(reference list name)") for m in trace.taxonomy_match]
     if trace.tier is None:
         rows.append(("tier", "untiered", "(needs a coordinator tier call)"))
     else:
+        if trace.tier_entry is None:
+            raise ValueError(f"{trace.job_id}: tiered trace has no tier_entry to cite")
+        sources = "; ".join(_source_text(src, trace.tier) for src in TIER_TABLE[trace.tier_entry].sources)
         rows += [
-            ("tier", trace.tier, f"({TIER_SOURCE})"),
+            ("tier", trace.tier, f"({sources})"),
             ("base_points", str(trace.base_points), "(from tier, not text)"),
             ("severity_bump", f"+{trace.severity_bump}", ""),
             *[("tally_reason", r, "") for r in trace.tally_reasons],

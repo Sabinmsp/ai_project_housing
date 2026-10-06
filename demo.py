@@ -42,7 +42,7 @@ def _standin_stages_3_to_5(report, facts) -> EnrichedJob:
         original_report_timestamp=report.original_report_timestamp,
         fault_description=facts.fault_description, taxonomy_match=facts.taxonomy_match,
         spans=spans, distance_cost_km=_STANDIN_DISTANCE.get(report.community),
-        tier=ev.tier.tier,
+        tier=ev.tier.tier, tier_entry=ev.tally.winner,
         base_points=ev.tally.base, severity_bump=ev.tally.bump,
         urgency_tally=ev.tally.tally, tally_reasons=ev.tally.reasons,
         safety_flag=(level == "active"), safety_level=level, safety_reason=ev.safety.reason,

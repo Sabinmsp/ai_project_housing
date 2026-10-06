@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import pytest
+
 from triage.adapter import to_rank_input
 from triage.evaluation import NO_ALTERNATIVE, NO_HAZARD
 from triage.explain import (
@@ -12,6 +14,7 @@ from triage.explain import (
 )
 from triage.models import EnrichedJob, VerifiedSpan
 from triage.ranking import NO_TIER_FLAG, REVIEW_BAND_REASON, rank
+from triage.tiers import TIER_TABLE
 
 MON = datetime(2026, 9, 28, 9, 0, tzinfo=timezone.utc)
 ACTIVE_REASON = "Active hazard described: 'water coming through the light fitting' — full override"
@@ -25,6 +28,7 @@ def panel_d_job(**overrides: Any) -> EnrichedJob:
         "fault_description": "roof leaking",
         "taxonomy_match": ["roof leak"],
         "tier": "dangerous",
+        "tier_entry": "roof leak",
         "base_points": 3,
         "severity_bump": 1,
         "urgency_tally": 4,
@@ -48,6 +52,7 @@ def standard_job(request_id: str, **overrides: Any) -> EnrichedJob:
         "community": "Darwin",
         "original_report_timestamp": MON,
         "tier": "standard",
+        "tier_entry": "power point not working",
         "base_points": 2,
         "severity_bump": 1,
         "urgency_tally": 3,
@@ -158,7 +163,7 @@ def test_trace_carries_enriched_job_flags() -> None:
 
 
 def test_untiered_safety_job_carries_no_tier_flag_and_renders() -> None:
-    job = panel_d_job(tier=None, base_points=None, severity_bump=None, urgency_tally=None, tally_reasons=())
+    job = panel_d_job(tier=None, tier_entry=None, base_points=None, severity_bump=None, urgency_tally=None, tally_reasons=())
     (tr,) = traces(job)
     assert NO_TIER_FLAG in tr.flags
     assert "untiered" in render_coordinator(tr)
@@ -173,8 +178,71 @@ def test_coordinator_view_shows_position_and_decided_by() -> None:
 
 
 def test_review_band_entry_uses_review_band_reason() -> None:
-    job = standard_job("R-AAAA", tier=None, base_points=None, severity_bump=None, urgency_tally=None, tally_reasons=())
+    job = standard_job("R-AAAA", tier=None, tier_entry=None, base_points=None, severity_bump=None, urgency_tally=None, tally_reasons=())
     result = rank([to_rank_input(job)])
     assert result.review_band == ("R-AAAA",)
     view = render_review_entry(job)
     assert REVIEW_BAND_REASON in view and "R-AAAA" in view
+
+
+# --- tier source attribution (Step 4.6c) ---------------------------------------
+
+ALL_SOURCES = sorted({src for e in TIER_TABLE.values() for src in e.sources})
+
+
+def entry_job(name: str) -> EnrichedJob:
+    tier = TIER_TABLE[name].tier
+    base = 3 if tier == "dangerous" else 2
+    return standard_job(
+        "R-3F9A1C2B", taxonomy_match=[name], tier=tier, tier_entry=name, base_points=base, urgency_tally=base + 1
+    )
+
+
+def shown(source: str, view: str) -> bool:
+    # RTA sources render by section number; nt.gov.au renders as itself.
+    return (source.removeprefix("RTA ") if source.startswith("RTA ") else source) in view
+
+
+@pytest.mark.parametrize("name", list(TIER_TABLE))
+def test_coordinator_shows_exactly_the_entry_sources(name: str) -> None:
+    (tr,) = traces(entry_job(name))
+    view = render_coordinator(tr)
+    for source in ALL_SOURCES:
+        assert shown(source, view) == (source in TIER_TABLE[name].sources), source
+
+
+def test_rta_only_entry_never_shows_nt_gov() -> None:
+    (tr,) = traces(entry_job("hot water system not working"))
+    view = render_coordinator(tr)
+    assert "nt.gov.au" not in view
+    assert "NT Residential Tenancies Act s63(2)(j) — emergency repair" in view
+
+
+def test_nt_gov_only_entry_never_shows_rta() -> None:
+    (tr,) = traces(entry_job("blocked drain"))
+    view = render_coordinator(tr)
+    assert "RTA" not in view and "Residential Tenancies" not in view
+    assert "nt.gov.au — on the repaired-first list" in view
+
+
+def test_several_sources_joined() -> None:
+    (tr,) = traces(entry_job("gas leak"))
+    assert "nt.gov.au — on the repaired-first list; NT Residential Tenancies Act s63(2)(d) — emergency repair" in render_coordinator(tr)
+
+
+@pytest.mark.parametrize("name", list(TIER_TABLE))
+def test_tenant_sms_names_no_source_or_tier_label(name: str) -> None:
+    (tr,) = traces(entry_job(name))
+    sms = render_tenant_sms(tr)
+    for word in ("dangerous", "standard", "nt.gov", "RTA", "Act"):
+        assert word not in sms, word
+    expected = "urgent repair" if TIER_TABLE[name].tier == "dangerous" else "general repair"
+    assert f"It's being treated as an {expected}." in sms or f"It's being treated as a {expected}." in sms
+
+
+@pytest.mark.parametrize("name", list(TIER_TABLE))
+def test_coordinator_never_says_nt_fault_list_name(name: str) -> None:
+    (tr,) = traces(entry_job(name))
+    view = render_coordinator(tr)
+    assert "NT fault list name" not in view
+    assert any(name in line and line.endswith("(reference list name)") for line in view.splitlines())

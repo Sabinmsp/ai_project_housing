@@ -18,6 +18,7 @@ def enriched(**overrides: Any) -> EnrichedJob:
         "community": "Wadeye",
         "original_report_timestamp": MON,
         "tier": "standard",
+        "tier_entry": "power point not working",
         "base_points": 2,
         "severity_bump": 1,
         "urgency_tally": 3,
@@ -47,7 +48,7 @@ def test_urgency_tally_becomes_tally() -> None:
 
 
 def test_none_tally_stays_none() -> None:
-    job = enriched(tier=None, base_points=None, severity_bump=None, urgency_tally=None)
+    job = enriched(tier=None, tier_entry=None, base_points=None, severity_bump=None, urgency_tally=None)
     assert to_rank_input(job).tally is None
 
 
@@ -82,6 +83,7 @@ def test_end_to_end_order() -> None:
     roof_into_light = enriched(
         request_id="R-ROOF",
         tier="dangerous",
+        tier_entry="roof leak",
         base_points=3,
         severity_bump=0,
         urgency_tally=3,
@@ -103,7 +105,7 @@ def test_end_to_end_order() -> None:
 
 
 @pytest.mark.parametrize(
-    "field", ["tier", "base_points", "severity_bump", "urgency_tally", "tally_reasons", "safety_level", "safety_reason", "flags"]
+    "field", ["tier", "tier_entry", "base_points", "severity_bump", "urgency_tally", "tally_reasons", "safety_level", "safety_reason", "flags"]
 )
 def test_enriched_job_field_without_default_must_be_given(field: str) -> None:
     fields = enriched().model_dump()
@@ -118,7 +120,14 @@ def test_safety_flag_must_match_level_at_construction() -> None:
 
 
 def test_review_band_needs_no_tally_and_no_safety() -> None:
-    untiered = {"tier": None, "base_points": None, "severity_bump": None, "urgency_tally": None, "tally_reasons": ()}
+    untiered = {"tier": None, "tier_entry": None, "base_points": None, "severity_bump": None, "urgency_tally": None, "tally_reasons": ()}
     assert enriched(**untiered).in_review_band
     assert not enriched(**untiered, safety_level="conditional").in_review_band
     assert not enriched().in_review_band
+
+
+def test_tier_entry_must_back_the_stated_tier() -> None:
+    with pytest.raises(ValidationError, match="tier_entry"):
+        enriched(tier_entry="gas leak")  # a dangerous entry on a standard job
+    with pytest.raises(ValidationError, match="tier_entry"):
+        enriched(tier_entry="serious roof leak")  # not a table name
