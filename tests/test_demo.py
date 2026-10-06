@@ -3,13 +3,14 @@ from datetime import datetime, timezone
 import pytest
 
 import demo
-from triage import evaluation
+from triage import evaluation, extraction
 from triage.adapter import to_rank_input
 from triage.evaluation import Evaluation, evaluate
 from triage.extraction import OfflineExtractor
 from triage.intake import create_report
 from triage.models import EnrichedJob, ExtractedFacts, ReportExtraction
 from triage.ranking import rank
+from triage.verification import verify_spans
 
 
 def test_stub_takes_base_and_bump_from_evaluation_not_reason_text(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -34,7 +35,7 @@ def stub(raw_text: str, facts: dict[str, object]) -> tuple[EnrichedJob, Evaluati
         "harm_claimed": False, "fault_or_sign": "fault", "claim_mismatch": None,
         "worsening_mentioned": False, "quoted_spans": [], **facts,
     })
-    unverified = frozenset((s.field, s.text) for s in f.quoted_spans if s.text not in raw_text)
+    unverified = verify_spans(raw_text, f)
     return demo._standin_stages_3_to_5(report, f), evaluate(f, unverified)
 
 
@@ -87,3 +88,58 @@ def test_single_fault_report_gives_one_job() -> None:
                            community="Darwin", original_report_timestamp=T0)
     (job,) = demo._standin_jobs(report, OfflineExtractor.read(report.raw_text))
     assert job.urgency_tally == 4
+
+
+def test_stub_ignores_a_span_that_backs_no_claim() -> None:
+    # impact_status "ongoing" needs no quote; a span quoting "ongoing" is noise, not a fabrication.
+    job, ev = stub("toilet blocked", {
+        "fault_description": "toilet blocked", "taxonomy_match": ["blocked or broken toilet"],
+        "quoted_spans": [{"field": "fault_description", "text": "toilet blocked"},
+                         {"field": "taxonomy_match", "text": "toilet blocked"},
+                         {"field": "impact_status", "text": "ongoing"}],
+    })
+    assert job.flags == ()
+    assert [(s.field, s.text, s.verified) for s in job.spans] == [
+        ("fault_description", "toilet blocked", True),
+        ("taxonomy_match", "toilet blocked", True),
+    ]  # the "ongoing" span is absent, not listed as unverified
+
+
+
+# --- offline by default: no API client without --live --------------------------------
+
+
+def _forbid_api_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise AssertionError("API client constructed without --live")
+    monkeypatch.setattr(extraction, "OpenAICompatibleClient", refuse)
+    monkeypatch.setattr(demo, "OpenAICompatibleClient", refuse)
+
+
+def test_demo_without_live_never_builds_the_api_client(monkeypatch: pytest.MonkeyPatch,
+                                                       capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-a-real-key")
+    _forbid_api_client(monkeypatch)
+    demo.main([])
+    out = capsys.readouterr().out
+    assert out.startswith("MODE: offline")
+    assert "extractor: offline" in out
+
+
+def test_demo_live_uses_the_api_client(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    class FakeLive(OfflineExtractor):  # answers like the offline reader; no network
+        name = "llm:fake"
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-a-real-key")
+    monkeypatch.setattr(demo, "OpenAICompatibleClient", FakeLive)
+    demo.main(["--live"])
+    out = capsys.readouterr().out
+    assert out.startswith("MODE: live LLM (llm:fake)")
+    assert "extractor: llm:fake" in out
+
+
+def test_demo_live_without_key_exits(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("TRIAGE_API_KEY", "")
+    _forbid_api_client(monkeypatch)
+    with pytest.raises(SystemExit, match="--live needs"):
+        demo.main(["--live"])

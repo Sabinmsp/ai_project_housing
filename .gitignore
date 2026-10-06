@@ -11,3 +11,5 @@ __pycache__/
 .env
 .DS_Store
 result.txt
+.env
+scratch/

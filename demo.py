@@ -7,15 +7,17 @@ once they land.
 Reports are read from the reports/ folder (one .pdf or .txt per report; see
 triage/report_files.py for the layout). Run: python demo.py [folder]
 """
+import argparse
 import os
 import sys
 from pathlib import Path
 
-from triage.extraction import OfflineExtractor, default_client, extract
+from triage.extraction import LLMClient, OfflineExtractor, OpenAICompatibleClient, extract
 from triage.intake import DuplicateRequestError, SQLiteReportRepository
 from triage.models import EnrichedJob, ExtractionStatus, ReportExtraction, VerifiedSpan
 from triage.adapter import to_rank_input
 from triage.evaluation import evaluate
+from triage.verification import claim_spans, verify_spans
 from triage.explain import build_traces, render_coordinator, render_review_entry, render_tenant_sms
 from triage.ranking import rank
 from triage.report_files import load_reports
@@ -30,12 +32,14 @@ _SAFETY_LEVEL_NAMES = ("none", "conditional", "active")  # index = safety level
 
 
 def _standin_stages_3_to_5(report, facts) -> EnrichedJob:
-    spans = [VerifiedSpan(field=s.field, text=s.text, verified=s.text in report.raw_text)
-             for s in facts.quoted_spans]
+    unverified = verify_spans(report.raw_text, facts)
+    # Spans that back no claim (e.g. impact_status quoting "ongoing") are left out entirely.
+    spans = [VerifiedSpan(field=s.field, text=s.text, verified=(s.field, s.text) not in unverified)
+             for s in claim_spans(facts)]
     if not facts.fault_description:
         # D4: extract() routes these out of scope, so evaluation must never see one.
         raise ValueError(f"{report.request_id}: no fault named, should not reach evaluation")
-    ev = evaluate(facts, frozenset((s.field, s.text) for s in spans if not s.verified))
+    ev = evaluate(facts, unverified)
     level = _SAFETY_LEVEL_NAMES[ev.safety.level]
     return EnrichedJob(
         request_id=report.request_id, community=report.community,
@@ -78,16 +82,26 @@ def _one_line(text: str) -> str:
     return text.replace("\n", " | ")
 
 
-def main() -> None:
-    _load_dotenv()
-    folder = Path(sys.argv[1]) if len(sys.argv) > 1 else REPORTS_DIR
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Run the triage pipeline on a folder of reports.")
+    parser.add_argument("folder", nargs="?", type=Path, default=REPORTS_DIR)
+    parser.add_argument("--live", action="store_true", help="use the real LLM (paid API calls); default is offline")
+    args = parser.parse_args(argv)
+    folder = args.folder
     if not folder.is_dir():
         sys.exit(f"Report folder not found: {folder}")
     repo = SQLiteReportRepository()
-    client = default_client()
-    if isinstance(client, OfflineExtractor):
-        print("OFFLINE STAND-IN: regex test double, not the real extractor. "
-              "Dialect handling requires the LLM path (master §3.2.3).")
+    # Offline unless --live: a key in .env must never turn a routine run into paid API calls.
+    if args.live:
+        _load_dotenv()
+        if not (os.environ.get("TRIAGE_API_KEY") or os.environ.get("OPENAI_API_KEY")):
+            sys.exit("--live needs TRIAGE_API_KEY or OPENAI_API_KEY (environment or .env).")
+        client: LLMClient = OpenAICompatibleClient()
+        print(f"MODE: live LLM ({client.name}) — paid API calls.")
+    else:
+        client = OfflineExtractor()
+        print("MODE: offline. OFFLINE STAND-IN: regex test double, not the real extractor. "
+              "Dialect handling requires the LLM path (master §3.2.3). Use --live for the LLM.")
 
     # ---- STAGE 1: intake ---------------------------------------------------
     reports, skipped = load_reports(folder)

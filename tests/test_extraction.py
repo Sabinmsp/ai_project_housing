@@ -1,5 +1,6 @@
 import ast
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import pytest
 from triage import extraction
 from triage.extraction import (
     FAULT_NAMES,
+    PROMPT_EXAMPLES,
     SYSTEM_PROMPT,
     OfflineExtractor,
     _FAULT_PATTERNS,
@@ -16,11 +18,19 @@ from triage.extraction import (
     response_schema,
 )
 from triage.intake import create_report
-from triage.models import ExtractedFacts, ExtractionStatus, ReportExtraction
+from triage.models import ExtractedFacts, ExtractionStatus, ReportExtraction, SourceTag
 from triage.report_files import parse_report_text, read_text
 from triage.tiers import TIER_TABLE
 
 T0 = datetime(2026, 9, 1, tzinfo=timezone.utc)
+
+# Words the model must never see (invariants 1 and 3). Schema: substring; prompt: whole word.
+BANNED_WORDS = (
+    "dangerous", "standard", "tier", "points", "score", "rank", "priority", "severity", "urgen",
+    "language", "dialect", "english", "tone",
+    "severe", "serious", "urgent", "urgency", "emergency",
+    "repaired first", "nt.gov.au", "s63", "Residential Tenancies",
+)
 
 
 def report(text):
@@ -88,9 +98,8 @@ def test_response_schema_has_no_numeric_fields():
 def test_schema_sent_to_model_has_no_scoring_language():
     """Panel A covers everything the model sees, the schema included."""
     text = json.dumps(response_schema()).lower()
-    for word in ("dangerous", "standard", "tier", "points", "score", "rank", "priority",
-                 "severity", "urgen", "language", "dialect", "english", "tone"):
-        assert word not in text, word
+    for word in BANNED_WORDS:
+        assert word.lower() not in text, word
 
 
 def test_response_schema_is_strict():
@@ -429,3 +438,107 @@ def test_faults_cannot_be_changed_in_place():
     with pytest.raises(ValueError):
         extraction.faults = (good, good)  # frozen model
     assert extraction.faults == (good,)
+
+
+
+# --- SYSTEM_PROMPT and build_user_prompt (step 3.2) ----------------------------------
+
+REPORTS_DIR = Path(__file__).parent.parent / "reports"
+LABELLED = Path(__file__).parent.parent / "data" / "synthetic" / "labelled.jsonl"
+
+
+def model_facing_texts() -> dict[str, str]:
+    # The template is checked with a placeholder, never tenant text, which may contain these words.
+    return {"SYSTEM_PROMPT": SYSTEM_PROMPT, "template": build_user_prompt("REPORT_TEXT")}
+
+
+@pytest.mark.parametrize("word", BANNED_WORDS)
+def test_prompt_and_template_have_no_banned_word(word):
+    pattern = re.compile(rf"(?<!\w){re.escape(word)}(?!\w)", re.IGNORECASE)
+    for name, text in model_facing_texts().items():
+        assert not pattern.search(text), f"{word!r} in {name}"
+
+
+def prompt_sections() -> list[tuple[str, str]]:
+    """(heading name, body) for every "### name" heading in SYSTEM_PROMPT."""
+    parts = re.split(r"^### (\S+)$", SYSTEM_PROMPT, flags=re.M)
+    return [(parts[i], parts[i + 1].strip()) for i in range(1, len(parts), 2)]
+
+
+@pytest.mark.parametrize("name", ["faults", *ExtractedFacts.model_fields])
+def test_prompt_has_one_non_empty_section_per_field(name):
+    matching = [body for heading, body in prompt_sections() if heading == name]
+    assert len(matching) == 1, f"### {name} appears {len(matching)} times"
+    assert matching[0], f"### {name} has an empty body"
+
+
+@pytest.mark.parametrize("rule, phrase", [
+    ("empty list", "If the report names no fault, return an empty faults list"),
+    ("one entry per fault", "Return one entry per distinct fault"),
+    ("no match", "No match is a correct answer"),
+    ("gas", 'A gas leak reported as present is "described" with mechanism_type "active"'),
+    ("all candidates", "If the words could fit more than one entry, list every entry they fit; do not choose between them."),
+    ("span text is report words", "Every span's text is words copied exactly from the REPORT TEXT — never a fault list name, "
+     "never a field value such as 'ongoing', 'fault' or 'sign'. Add a span only where a field below says one is required."),
+    ("taxonomy span", "When the list is not empty it needs its own span with field taxonomy_match, "
+     "even if those are the same words as fault_description."),
+    ("gas smell is the fault", "A smell of gas is the fault itself (a gas leak), so fault_or_sign is 'fault'."),
+])
+def test_prompt_states_required_rule(rule, phrase):
+    assert " ".join(phrase.split()) in " ".join(SYSTEM_PROMPT.split()), rule
+
+
+def test_user_prompt_has_report_verbatim():
+    text = 'dunny\'s cooked,\n  "won\'t go down"  since Tuesday'
+    assert f"<<<\n{text}\n>>>" in build_user_prompt(text)
+
+
+def test_source_tag_never_reaches_the_model():
+    # The tag stays on the Report; nothing model-facing names it.
+    for name, prompt in model_facing_texts().items():
+        for tag in SourceTag:
+            assert tag.value.lower() not in prompt.lower(), f"{tag.value!r} in {name}"
+
+
+def section(name: str) -> str:
+    (body,) = [b for heading, b in prompt_sections() if heading == name]
+    return " ".join(body.split())
+
+
+def test_mechanism_type_active_means_happening_now():
+    body = section("mechanism_type")
+    assert "happening now" in body
+    assert "could happen now" not in body
+
+
+# Phrases held back for evaluating the model; if the prompt contained them, a test report
+# using them would be answered from the prompt rather than understood.
+RESERVED_TEST_TERMS = ("dunny", "won't go down", "chocked")
+
+
+@pytest.mark.parametrize("term", RESERVED_TEST_TERMS)
+def test_reserved_test_terms_never_in_prompt(term):
+    for name, prompt in model_facing_texts().items():
+        assert term.lower() not in prompt.lower(), f"{term!r} in {name}"
+
+
+def _normalise(text: str) -> str:
+    return " ".join(text.split()).casefold()
+
+
+def test_prompt_examples_never_come_from_report_files():
+    corpus = [_normalise(read_text(p)) for p in sorted(REPORTS_DIR.iterdir()) if p.suffix in (".pdf", ".txt")]
+    if LABELLED.exists():
+        for line in LABELLED.read_text().splitlines():
+            if line.strip():
+                record = json.loads(line)
+                corpus += [_normalise(v) for v in record.values() if isinstance(v, str)]
+    assert corpus
+    for key, example in PROMPT_EXAMPLES.items():
+        for text in corpus:
+            assert _normalise(example) not in text, key
+
+
+def test_every_prompt_example_is_in_the_prompt():
+    for key, example in PROMPT_EXAMPLES.items():
+        assert f'"{example}"' in SYSTEM_PROMPT, key

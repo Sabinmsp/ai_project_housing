@@ -44,7 +44,7 @@ python demo.py             # ranks every report in reports/
 python demo.py some/folder # or any other folder
 ```
 
-To use a real model, set `TRIAGE_API_KEY` (or `OPENAI_API_KEY`), and optionally `TRIAGE_MODEL` and `TRIAGE_BASE_URL` for any OpenAI-compatible endpoint (OpenRouter and LiteLLM proxy work). `demo.py` also reads these from a git-ignored `.env` file. With no key, the offline keyword reader is used.
+To use a real model, set `TRIAGE_API_KEY` (or `OPENAI_API_KEY`), and optionally `TRIAGE_MODEL` and `TRIAGE_BASE_URL` for any OpenAI-compatible endpoint (OpenRouter and LiteLLM proxy work). `demo.py` runs offline (the keyword reader) unless you pass `--live`; only then does it read these from the environment or a git-ignored `.env` file.
 
 ## Adding a report
 
