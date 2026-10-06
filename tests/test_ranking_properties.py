@@ -10,7 +10,8 @@ from triage.ranking import rank
 LATEST = datetime(2026, 10, 4, 9, 0)
 EARLIEST = LATEST - timedelta(days=90)
 
-distances = st.floats(min_value=0, max_value=2000)
+# None included: an unknown distance must not move a job either.
+distances = st.none() | st.floats(min_value=0, max_value=2000)
 
 jobs_strategy = st.lists(
     # st.builds calls RankInput(...) with a value drawn from each strategy.

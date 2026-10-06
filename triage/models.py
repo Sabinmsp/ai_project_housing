@@ -30,9 +30,10 @@ class RankInput(BaseModel):
     tally: int | None = Field(strict=True, ge=2, le=4)
     # FIFO tie-break: AwareDatetime rejects naive times, which can't be compared safely.
     original_timestamp: AwareDatetime
-    # Logistics G1: carried for display; rank() must never read it.
+    # Logistics G1: carried for display; rank() must never read it. None = unknown, so a
+    # display never shows a missing distance as 0 km.
     # allow_inf_nan=False: ge=0 alone lets inf through.
-    distance_km: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    distance_km: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
     # mode="before" runs on the raw input, before Pydantic would turn a number into a
     # Unix-epoch datetime. A defaulted 0 would become 1970 and jump the FIFO queue.
