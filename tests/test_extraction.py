@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+import openai
 import pytest
 
 from triage import extraction
@@ -542,3 +543,38 @@ def test_prompt_examples_never_come_from_report_files():
 def test_every_prompt_example_is_in_the_prompt():
     for key, example in PROMPT_EXAMPLES.items():
         assert f'"{example}"' in SYSTEM_PROMPT, key
+
+
+class FakeOpenAI:
+    """Swapped in for the SDK constructor; records what the client was built with."""
+
+    def __init__(self, **kwargs: object) -> None:
+        self.kwargs = kwargs
+
+
+@pytest.mark.parametrize("value", ["", None])
+def test_unset_or_empty_model_and_base_url_fall_back_to_defaults(monkeypatch: pytest.MonkeyPatch,
+                                                                 value: str | None) -> None:
+    monkeypatch.setattr(openai, "OpenAI", FakeOpenAI)
+    for name in ("TRIAGE_MODEL", "TRIAGE_BASE_URL"):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    client = extraction.OpenAICompatibleClient(api_key="x")
+    assert client.model == "gpt-4o"
+    assert client._client.kwargs["base_url"] is None
+
+
+def test_set_model_and_base_url_are_used(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(openai, "OpenAI", FakeOpenAI)
+    monkeypatch.setenv("TRIAGE_MODEL", "gpt-4o-mini")
+    monkeypatch.setenv("TRIAGE_BASE_URL", "https://example.test/v1")
+    client = extraction.OpenAICompatibleClient(api_key="x")
+    assert (client.model, client._client.kwargs["base_url"]) == ("gpt-4o-mini", "https://example.test/v1")
+
+
+def test_repo_wide_guard_refuses_the_real_api_client() -> None:
+    # conftest's autouse guard: this file is not test_demo.py, and still cannot reach the API.
+    with pytest.raises(AssertionError, match="real API client constructed in a test"):
+        extraction.OpenAICompatibleClient(api_key="x")

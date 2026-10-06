@@ -24,6 +24,11 @@ from .models import (
 # Invariant 1: import names only. TIER_TABLE carries tiers and must never be imported here.
 from .tiers import FAULT_NAMES
 
+try:
+    from openai import OpenAIError as _ProviderError  # optional dependency
+except ImportError:
+    _ProviderError = OSError  # type: ignore[misc, assignment]
+
 # The only examples the model sees. None may come from reports/ (a test checks), so the
 # prompt can't teach the answer to a report it will later be scored on.
 PROMPT_EXAMPLES = {
@@ -157,6 +162,15 @@ class LLMClient(Protocol):
 # balance for every call.
 MAX_OUTPUT_TOKENS = 1024
 
+# Probe 2026-10-06 gave 0/21 validation failures vs 17/21 for gpt-4o-mini.
+DEFAULT_MODEL = "gpt-4o"
+
+
+def configured_model() -> str:
+    """TRIAGE_MODEL, or the default when it is unset or empty."""
+    # `or`, not a get() default: a blank `TRIAGE_MODEL=` line in .env loads as "".
+    return os.environ.get("TRIAGE_MODEL") or DEFAULT_MODEL
+
 
 class OpenAICompatibleClient:
     """Any OpenAI-compatible endpoint that supports json_schema response format."""
@@ -165,11 +179,11 @@ class OpenAICompatibleClient:
                  api_key: Optional[str] = None) -> None:
         from openai import OpenAI  # optional dependency
 
-        # Default gpt-4o: probe 2026-10-06 gave 0/21 validation failures vs 17/21 for gpt-4o-mini.
-        self.model = model or os.environ.get("TRIAGE_MODEL", "gpt-4o")
+        self.model = model or configured_model()
         self.name = f"llm:{self.model}"
         self._client = OpenAI(
-            base_url=base_url or os.environ.get("TRIAGE_BASE_URL"),
+            # An empty TRIAGE_BASE_URL means unset: None lets the SDK use its default endpoint.
+            base_url=base_url or os.environ.get("TRIAGE_BASE_URL") or None,
             api_key=api_key or os.environ.get("TRIAGE_API_KEY") or os.environ.get("OPENAI_API_KEY"),
         )
 
@@ -227,6 +241,13 @@ def _parse(raw_json: str, fault_names: tuple[str, ...]) -> ReportExtraction:
     return extraction
 
 
+def _redact(text: str) -> str:
+    for key in (os.environ.get("TRIAGE_API_KEY"), os.environ.get("OPENAI_API_KEY")):
+        if key:
+            text = text.replace(key, "<redacted>")
+    return text
+
+
 def extract(report: Report, client: LLMClient,
             fault_names: tuple[str, ...] = FAULT_NAMES) -> ExtractionResult:
     """One model call, validated at the boundary. Retry once, then flag for a human."""
@@ -238,8 +259,10 @@ def extract(report: Report, client: LLMClient,
         try:
             raw = client.complete_json(SYSTEM_PROMPT, user, schema)
             extraction = _parse(raw, fault_names)
-        except (ValidationError, ValueError, json.JSONDecodeError) as e:
-            errors.append(f"attempt {attempt}: {e.__class__.__name__}: {str(e)[:300]}")
+        # Provider and network errors too: one failed call flags its report, never ends the run.
+        except (ValidationError, ValueError, json.JSONDecodeError, _ProviderError, OSError) as e:
+            # Redact before truncating, or the cut could leave part of a key behind.
+            errors.append(f"attempt {attempt}: {e.__class__.__name__}: {_redact(str(e))[:300]}")
             continue
         status = ExtractionStatus.OK if extraction.faults else ExtractionStatus.NO_FAULT_NAMED
         return ExtractionResult(request_id=report.request_id, status=status,

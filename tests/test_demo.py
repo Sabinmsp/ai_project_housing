@@ -2,6 +2,8 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
+import openai
 import pytest
 
 import demo
@@ -9,24 +11,13 @@ from triage import evaluation, extraction, recording
 from triage.adapter import to_rank_input
 from triage.evaluation import Evaluation, evaluate
 from triage.extraction import OfflineExtractor
-from triage.intake import create_report
+from triage.escalation import escalate
+from triage.intake import SQLiteReportRepository, create_report
+from triage.explain import ReasoningTrace, build_traces, render_tenant_sms
 from triage.models import EnrichedJob, ExtractedFacts, Report, ReportExtraction
 from triage.ranking import rank
 from triage.report_files import parse_report_text, read_text
 from triage.verification import verify_spans
-
-
-@pytest.fixture(autouse=True)
-def no_real_api(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No test reads .env or builds the real API client; a test that needs "live" swaps in a fake."""
-    monkeypatch.setattr(demo, "_load_dotenv", lambda *args, **kwargs: None)
-    monkeypatch.setenv("OPENAI_API_KEY", "")
-    monkeypatch.setenv("TRIAGE_API_KEY", "")
-
-    def refuse(*args: object, **kwargs: object) -> None:
-        raise AssertionError("real API client constructed in a test")
-    monkeypatch.setattr(demo, "OpenAICompatibleClient", refuse)
-    monkeypatch.setattr(extraction, "OpenAICompatibleClient", refuse)
 
 
 def test_stub_takes_base_and_bump_from_evaluation_not_reason_text(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -175,7 +166,21 @@ def test_n_faults_give_n_jobs(n: int) -> None:
         assert report.request_id not in {j.request_id for j in jobs}
 
 
-DUPLICATE = 'Possible duplicate: this report has two entries for "gas leak". Check before dispatching both.'
+def test_child_ids_in_the_sms_can_be_escalated() -> None:
+    repo, report = SQLiteReportRepository(), compound_report()
+    repo.save(report)
+    extraction = ReportExtraction(faults=(WIRE, GAS))
+    jobs = demo._standin_jobs(report, extraction)
+    demo._save_children(repo, extraction, jobs)
+    later = datetime(2026, 9, 5, tzinfo=timezone.utc)
+    updated, _ = escalate(repo, jobs[1].request_id, "still smell gas", later, OfflineExtractor())
+    assert updated.request_id == report.request_id
+    assert updated.original_report_timestamp == report.original_report_timestamp
+    assert repo.get_child(jobs[0].request_id).facts == WIRE
+
+
+def duplicate(n: int, *also: str) -> str:
+    return f'Possible duplicate: {n} entries for "gas leak" in this report (also {", ".join(also)}). Check before dispatching.'
 
 
 def test_shared_taxonomy_entry_flags_both_jobs_and_keeps_both() -> None:
@@ -183,7 +188,28 @@ def test_shared_taxonomy_entry_flags_both_jobs_and_keeps_both() -> None:
     second = fault("I can smell gas", ["gas leak"])
     jobs = demo._standin_jobs(compound_report(), ReportExtraction(faults=(first, second)))
     assert len(jobs) == 2
-    assert all(DUPLICATE in j.flags for j in jobs)
+    a, b = (j.request_id for j in jobs)
+    assert [j.flags for j in jobs] == [(duplicate(2, b),), (duplicate(2, a),)]
+
+
+THREE_GAS = (fault("smell gas", ["gas leak"]), fault("I can smell gas", ["gas leak"]), fault("gas", ["gas leak"]))
+
+
+def test_three_shared_entries_give_the_count_and_name_every_sibling() -> None:
+    jobs = demo._standin_jobs(compound_report(), ReportExtraction(faults=THREE_GAS))
+    a, b, c = (j.request_id for j in jobs)
+    assert [j.flags for j in jobs] == [(duplicate(3, b, c),), (duplicate(3, a, c),), (duplicate(3, a, b),)]
+
+
+def test_duplicate_flag_never_reaches_the_tenant_sms() -> None:
+    jobs = demo._standin_jobs(compound_report(), ReportExtraction(faults=THREE_GAS))
+    traces = build_traces(rank([to_rank_input(j) for j in jobs]), {j.request_id: j for j in jobs})
+    for trace in traces:
+        assert any(f.startswith("Possible duplicate") for f in trace.flags)  # the coordinator sees it
+        without = ReasoningTrace.model_validate({**trace.model_dump(), "flags": ()})
+        assert render_tenant_sms(trace) == render_tenant_sms(without)
+        others = {j.request_id for j in jobs} - {trace.job_id}
+        assert not any(job_id in render_tenant_sms(trace) for job_id in others)
 
 
 def test_distinct_taxonomy_entries_are_not_flagged_as_duplicates() -> None:
@@ -323,7 +349,7 @@ def test_record_writes_one_file_per_report(tmp_path: Path, store: Path, monkeypa
     assert sorted(p.name for p in store.iterdir()) == sorted(recording.recording_path(m, store).name for m in messages)
     for message in messages:
         record = json.loads(recording.recording_path(message, store).read_text(encoding="utf-8"))
-        assert record["prompt_hash"] == recording.prompt_hash()
+        assert record["prompt_hash"] == recording.prompt_hash("gpt-4o-fake")
         assert record["model"] == "gpt-4o-fake"
         assert ReportExtraction.model_validate_json(record["response"]) == OfflineExtractor.read(message)
 
@@ -343,3 +369,65 @@ def test_stage2_marks_a_span_that_backs_no_claim(tmp_path: Path, store: Path,
     out = capsys.readouterr().out
     assert "quote [impact_status]: (ignored — backs no claim)" in out
     assert "'ongoing'" not in out
+
+
+def test_offline_never_reads_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    folder = write_reports(tmp_path / "reports", "toilet blocked")
+    calls: list[object] = []
+    monkeypatch.setattr(demo, "_load_dotenv", lambda *args, **kwargs: calls.append(args))
+    demo.main(["--offline", str(folder)])
+    assert calls == []
+
+
+KEY = "sk-test-not-a-real-key"
+
+
+class RateLimitedOnStove(FakeLive):
+    """Answers like FakeLive, except the provider rate-limits the stove report every time."""
+
+    def complete_json(self, system: str, user: str, schema: dict) -> str:
+        if "stove" in extraction.report_text_from_prompt(user):
+            response = httpx.Response(429, request=httpx.Request("POST", "https://api.example"))
+            raise openai.RateLimitError(f"Rate limit reached for key {KEY}", response=response, body=None)
+        return super().complete_json(system, user, schema)
+
+
+def test_provider_error_flags_that_report_and_the_run_continues(tmp_path: Path, store: Path,
+                                                                monkeypatch: pytest.MonkeyPatch,
+                                                                capsys: pytest.CaptureFixture[str]) -> None:
+    folder = write_reports(tmp_path / "reports", "toilet blocked", "stove's not working", "dripping tap")
+    monkeypatch.setenv("OPENAI_API_KEY", KEY)
+    monkeypatch.setattr(demo, "OpenAICompatibleClient", RateLimitedOnStove)
+    demo.main([str(folder)])
+    out = capsys.readouterr().out
+    assert out.count("status=ok") == 2
+    assert out.count("status=flagged_for_human") == 1
+    assert "RateLimitError: Rate limit reached for key <redacted>" in out
+    assert KEY not in out
+
+
+@pytest.mark.parametrize("content", ["not json{", "{}", '["a list"]', '{"model": "gpt-4o", "recorded_at": 1}'])
+def test_unreadable_recording_is_a_flagged_miss_and_the_run_continues(
+        tmp_path: Path, store: Path, capsys: pytest.CaptureFixture[str], content: str) -> None:
+    folder = write_reports(tmp_path / "reports", "toilet blocked", "stove's not working")
+    write_recording(store, "stove's not working", OfflineExtractor.read("stove's not working").model_dump_json())
+    recording.recording_path("toilet blocked", store).write_text(content, encoding="utf-8")
+    (store / "stray.json").write_text(content, encoding="utf-8")
+    demo.main([str(folder)])
+    out = capsys.readouterr().out
+    assert out.startswith("MODE: recorded gpt-4o responses (recorded 2026-10-06)")
+    assert out.count("status=ok") == 1
+    assert out.count("status=flagged_for_human") == 1
+    assert "recording unreadable" in out
+
+
+def test_demo_run_stores_compound_children_for_escalation(tmp_path: Path, store: Path,
+                                                         monkeypatch: pytest.MonkeyPatch) -> None:
+    folder = write_reports(tmp_path / "reports", GAS_AND_WIRE)
+    write_recording(store, GAS_AND_WIRE, ReportExtraction(faults=(WIRE, GAS)).model_dump_json())
+    seen: list[tuple[SQLiteReportRepository, list[EnrichedJob]]] = []
+    real = demo._save_children
+    monkeypatch.setattr(demo, "_save_children", lambda repo, ext, jobs: (seen.append((repo, jobs)), real(repo, ext, jobs)))
+    demo.main([str(folder)])
+    ((repo, jobs),) = seen
+    assert [repo.get_child(j.request_id).facts for j in jobs] == [WIRE, GAS]

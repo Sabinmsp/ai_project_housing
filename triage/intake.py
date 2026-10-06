@@ -6,12 +6,13 @@ repository interface so ranking never touches SQL.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
 from datetime import datetime, timezone
 from typing import Optional, Protocol
 
-from .models import Report, SourceTag
+from .models import ChildJob, Report, SourceTag
 
 
 def new_request_id() -> str:
@@ -56,6 +57,9 @@ class ReportRepository(Protocol):
     def get(self, request_id: str) -> Optional[Report]: ...
     def append_followup(self, request_id: str, text: str, received_at: datetime) -> Report: ...
     def all(self) -> list[Report]: ...
+    def save_child(self, job: ChildJob) -> None: ...
+    def get_child(self, job_id: str) -> Optional[ChildJob]: ...
+    def children(self, parent_report_id: str) -> list[ChildJob]: ...
 
 
 class DuplicateRequestError(Exception):
@@ -94,6 +98,16 @@ class SQLiteReportRepository:
                 request_id TEXT NOT NULL REFERENCES reports(request_id),
                 text TEXT NOT NULL,
                 received_at TEXT NOT NULL
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS child_jobs (
+                job_id TEXT PRIMARY KEY,
+                parent_report_id TEXT NOT NULL REFERENCES reports(request_id),
+                facts TEXT NOT NULL,
+                flags TEXT NOT NULL
             )
             """
         )
@@ -171,6 +185,32 @@ class SQLiteReportRepository:
     def all(self) -> list[Report]:
         rows = self._conn.execute("SELECT * FROM reports").fetchall()
         return [self._row_to_report(r, self._followups(r[0])) for r in rows]
+
+    def save_child(self, job: ChildJob) -> None:
+        """Insert or update a compound report's child job."""
+        if self.get(job.parent_report_id) is None:
+            raise UnknownRequestError(job.parent_report_id)
+        # Upsert, not INSERT OR REPLACE: a replace re-inserts the row and changes children() order.
+        self._conn.execute(
+            "INSERT INTO child_jobs VALUES (?, ?, ?, ?) ON CONFLICT(job_id) DO UPDATE SET "
+            "parent_report_id = excluded.parent_report_id, facts = excluded.facts, flags = excluded.flags",
+            (job.job_id, job.parent_report_id, job.facts.model_dump_json(), json.dumps(job.flags)),
+        )
+        self._conn.commit()
+
+    def _row_to_child(self, row: tuple) -> ChildJob:
+        return ChildJob.model_validate({"job_id": row[0], "parent_report_id": row[1],
+                                        "facts": json.loads(row[2]), "flags": json.loads(row[3])})
+
+    def get_child(self, job_id: str) -> Optional[ChildJob]:
+        row = self._conn.execute("SELECT * FROM child_jobs WHERE job_id = ?", (job_id,)).fetchone()
+        return None if row is None else self._row_to_child(row)
+
+    def children(self, parent_report_id: str) -> list[ChildJob]:
+        rows = self._conn.execute(
+            "SELECT * FROM child_jobs WHERE parent_report_id = ? ORDER BY rowid", (parent_report_id,)
+        ).fetchall()
+        return [self._row_to_child(r) for r in rows]
 
 
 def utc_now() -> datetime:

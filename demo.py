@@ -10,13 +10,16 @@ triage/report_files.py for the layout). Run: python demo.py [folder]
 import argparse
 import os
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 from triage.extraction import LLMClient, OfflineExtractor, OpenAICompatibleClient, extract
 from triage.intake import DuplicateRequestError, SQLiteReportRepository, new_request_id
-from triage.models import EnrichedJob, ExtractionStatus, ReportExtraction, VerifiedSpan
+from triage.models import (ChildJob, EnrichedJob, ExtractedFacts, ExtractionStatus, Report, ReportExtraction,
+                           VerifiedSpan)
 from triage.adapter import to_rank_input
 from triage.evaluation import evaluate
+from triage.distances import load_distances
 from triage.recording import RECORDED_DIR, RecordedClient, RecordingClient
 from triage.verification import claim_spans, verify_spans
 from triage.explain import build_traces, render_coordinator, render_review_entry, render_tenant_sms
@@ -26,7 +29,7 @@ from triage.report_files import load_reports
 REPORTS_DIR = Path(__file__).with_name("reports")
 
 # ---- stand-ins for teammates' stages (NOT part of Stages 1, 2, 6) --------
-_STANDIN_DISTANCE = {"Wadeye": 412, "Maningrida": 510, "Darwin": 0, "Galiwinku": 560}
+_STANDIN_DISTANCE = load_distances()
 
 
 _SAFETY_LEVEL_NAMES = ("none", "conditional", "active")  # index = safety level
@@ -57,28 +60,40 @@ def _standin_stages_3_to_5(report, facts, job_id: str | None = None, extra_flags
     )
 
 
-def _duplicate_flags(faults) -> list[tuple[str, ...]]:
+def _duplicate_flags(faults: Sequence[ExtractedFacts], ids: Sequence[str]) -> list[tuple[str, ...]]:
     """Per fault, a flag for each taxonomy entry another fault in the same report also matched."""
     flags = []
     for i, facts in enumerate(faults):
-        others = {name for j, f in enumerate(faults) if j != i for name in f.taxonomy_match}
-        # Flag, never merge: two entries may really be two faults, and a merge could drop one.
-        flags.append(tuple(
-            f'Possible duplicate: this report has two entries for "{name}". Check before dispatching both.'
-            for name in dict.fromkeys(facts.taxonomy_match) if name in others
-        ))
+        mine = []
+        for name in dict.fromkeys(facts.taxonomy_match):
+            sharing = [ids[j] for j, f in enumerate(faults) if name in f.taxonomy_match]
+            if len(sharing) > 1:
+                also = ", ".join(job_id for job_id in sharing if job_id != ids[i])
+                # Flag, never merge: two entries may really be two faults, and a merge could drop one.
+                mine.append(f'Possible duplicate: {len(sharing)} entries for "{name}" in this report '
+                            f"(also {also}). Check before dispatching.")
+        flags.append(tuple(mine))
     return flags
 
 
-def _standin_jobs(report, extraction: ReportExtraction) -> list[EnrichedJob]:
+def _standin_jobs(report: Report, extraction: ReportExtraction) -> list[EnrichedJob]:
     """One job per fault, none dropped or merged. [] never gets here: extract() routes it out of scope."""
     faults = extraction.faults
     # One fault keeps the report's id. In a compound report every job gets its own id, so none
     # is mistaken for the report itself; parent_report_id links them back.
     ids = [report.request_id] if len(faults) == 1 else [new_request_id() for _ in faults]
     return [_standin_stages_3_to_5(report, facts, job_id, dups)
-            for facts, job_id, dups in zip(faults, ids, _duplicate_flags(faults))]
+            for facts, job_id, dups in zip(faults, ids, _duplicate_flags(faults, ids))]
 # --------------------------------------------------------------------------
+
+
+def _save_children(repo: SQLiteReportRepository, extraction: ReportExtraction, jobs: list[EnrichedJob]) -> None:
+    """Store a compound report's child jobs, so a tenant replying with a child's id can escalate it."""
+    if len(jobs) == 1:
+        return  # the single job is the report itself; escalation finds it by request_id
+    for job, facts in zip(jobs, extraction.faults, strict=True):
+        repo.save_child(ChildJob.model_validate({"job_id": job.request_id, "parent_report_id": job.parent_report_id,
+                                                 "facts": facts, "flags": ()}))
 
 
 def _choose_client(offline: bool, record: bool) -> LLMClient:
@@ -196,7 +211,11 @@ def main(argv: list[str] | None = None) -> None:
             print("  -> no fault named: out of scope, coordinator contacts tenant")
 
     # ---- STAGES 3-5: teammates (placeholders in this demo) ----------------
-    jobs = [job for report, extraction in extracted for job in _standin_jobs(report, extraction)]
+    jobs = []
+    for report, extraction in extracted:
+        report_jobs = _standin_jobs(report, extraction)
+        _save_children(repo, extraction, report_jobs)
+        jobs.extend(report_jobs)
     _heading("STAGES 3-5 - teammates' stages (placeholders here, output not shown)")
 
     # ---- STAGE 6: ranking + why-trace -------------------------------------

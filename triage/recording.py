@@ -10,19 +10,23 @@ from datetime import date
 from pathlib import Path
 
 from triage import extraction
-from triage.extraction import SYSTEM_PROMPT, LLMClient, report_text_from_prompt, response_schema
+from triage.extraction import (SYSTEM_PROMPT, LLMClient, configured_model, report_text_from_prompt,
+                               response_schema)
 
 RECORDED_DIR = Path(__file__).resolve().parent.parent / "data" / "recorded"
 MISS = "Needs the live model: set OPENAI_API_KEY"
+_FIELDS = ("model", "recorded_at", "prompt_hash", "response")
 
 
 class RecordingMissing(ValueError):
     """No usable recording for this report. A ValueError, so extract() flags it for a human."""
 
 
-def prompt_hash() -> str:
-    """Fingerprint of everything the model sees besides the report itself."""
+def prompt_hash(model: str | None = None) -> str:
+    """Fingerprint of the model and everything it sees besides the report itself."""
     parts = [
+        # A different model gives a different answer to the same prompt.
+        model or configured_model(),
         SYSTEM_PROMPT,
         extraction.build_user_prompt("REPORT_TEXT"),  # the message template, with a fixed placeholder
         # Read at call time and kept in order: a renamed or reordered fault list is a different question.
@@ -36,25 +40,37 @@ def recording_path(raw_text: str, folder: Path) -> Path:
     return folder / f"{hashlib.sha256(raw_text.encode('utf-8')).hexdigest()}.json"
 
 
+def _read(path: Path) -> dict | None:
+    """The recording at path, or None if it is not valid JSON with every field as a string."""
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(record, dict) or not all(isinstance(record.get(k), str) for k in _FIELDS):
+        return None
+    return record
+
+
 class RecordedClient:
     """Replays a saved response for the exact report text; a miss raises, never guesses."""
 
     def __init__(self, folder: Path = RECORDED_DIR) -> None:
         self.folder = folder
-        self.current = prompt_hash()
-        usable = [r for r in self._all() if r["prompt_hash"] == self.current]
-        self.model = usable[0]["model"] if usable else "gpt-4o"
+        self.model = configured_model()
+        self.current = prompt_hash(self.model)
+        # A stray or corrupt file is skipped here and flagged when its report is looked up.
+        records = (_read(p) for p in sorted(self.folder.glob("*.json")))
+        usable = [r for r in records if r and r["prompt_hash"] == self.current]
         self.recorded_on = max((r["recorded_at"] for r in usable), default=None)
         self.name = f"recorded:{self.model}"
-
-    def _all(self) -> list[dict]:
-        return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(self.folder.glob("*.json"))]
 
     def complete_json(self, system: str, user: str, schema: dict) -> str:
         path = recording_path(report_text_from_prompt(user), self.folder)
         if not path.exists():
             raise RecordingMissing(MISS)
-        record = json.loads(path.read_text(encoding="utf-8"))
+        record = _read(path)
+        if record is None:
+            raise RecordingMissing(f"{MISS} (recording unreadable: {path.name})")
         # A response recorded under another prompt answers a different question.
         if record["prompt_hash"] != self.current:
             raise RecordingMissing(f"{MISS} (recorded under an older prompt)")
@@ -74,7 +90,7 @@ class RecordingClient:
         raw = self.live.complete_json(system, user, schema)
         self.folder.mkdir(parents=True, exist_ok=True)
         record = {"model": self.model, "recorded_at": date.today().isoformat(),
-                  "prompt_hash": prompt_hash(), "response": raw}
+                  "prompt_hash": prompt_hash(self.model), "response": raw}
         # On a retry this overwrites the first attempt, so the file holds the last answer given.
         recording_path(report_text_from_prompt(user), self.folder).write_text(
             json.dumps(record, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

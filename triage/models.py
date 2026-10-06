@@ -233,6 +233,18 @@ class ExtractionResult(BaseModel):
     extractor: str  # "llm:<model>" or "offline"
 
 
+class ChildJob(BaseModel):
+    """One fault of a compound report, stored so the tenant can escalate by the job's own id."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    job_id: str = Field(min_length=1)
+    parent_report_id: str = Field(min_length=1)
+    facts: ExtractedFacts
+    # No default: escalation flags must be carried forward, never dropped by omission.
+    flags: tuple[Reason, ...]
+
+
 # ---------------------------------------------------------------------------
 # Stages 3 to 5 output: what Stage 6 consumes (owned by teammates)
 # ---------------------------------------------------------------------------

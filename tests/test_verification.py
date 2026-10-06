@@ -73,6 +73,11 @@ def test_fabricated_hazard_span_with_described_status_is_unverified() -> None:
     assert verify_spans(REPORT, f) == {("hazard", "water on the wires")}
 
 
+def test_fabricated_hazard_span_with_unclear_status_is_unverified_not_dropped() -> None:
+    f = facts([("hazard", "invented words")], hazard_status="unclear")
+    assert verify_spans(REPORT, f) == {("hazard", "invented words")}
+
+
 def test_taxonomy_span_quoting_a_list_name_is_unverified() -> None:
     data = facts([]).model_dump()
     data["quoted_spans"] = [{"field": "fault_description", "text": "toilet is blocked"},
