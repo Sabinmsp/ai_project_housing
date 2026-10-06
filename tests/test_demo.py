@@ -2,7 +2,6 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-import httpx
 import openai
 import pytest
 
@@ -387,8 +386,11 @@ class RateLimitedOnStove(FakeLive):
 
     def complete_json(self, system: str, user: str, schema: dict) -> str:
         if "stove" in extraction.report_text_from_prompt(user):
-            response = httpx.Response(429, request=httpx.Request("POST", "https://api.example"))
-            raise openai.RateLimitError(f"Rate limit reached for key {KEY}", response=response, body=None)
+            # A real RateLimitError built without an HTTP response object: openai 1.x builds those
+            # with httpx, 3.x with httpx2, and neither is a direct dependency of this project.
+            error = openai.RateLimitError.__new__(openai.RateLimitError)
+            Exception.__init__(error, f"Rate limit reached for key {KEY}")
+            raise error
         return super().complete_json(system, user, schema)
 
 
