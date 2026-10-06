@@ -1,0 +1,6 @@
+{
+  "model": "gpt-4o",
+  "recorded_at": "2026-10-06",
+  "prompt_hash": "ffec9b821730ef9c50e79b016a06a204ef82afaa59d955992ae126696c363c38",
+  "response": "{\"faults\":[{\"fault_description\":\"the ceiling fan wobbles and makes a noise\",\"taxonomy_match\":[],\"alternative_mentioned\":false,\"coping_mentioned\":false,\"impact_status\":\"ongoing\",\"hazard_status\":\"none\",\"mechanism_type\":null,\"harm_claimed\":false,\"fault_or_sign\":\"fault\",\"claim_mismatch\":null,\"worsening_mentioned\":false,\"quoted_spans\":[{\"field\":\"fault_description\",\"text\":\"the ceiling fan wobbles and makes a noise\"},{\"field\":\"impact_status\",\"text\":\"ongoing\"}]}]}"
+}
