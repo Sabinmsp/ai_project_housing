@@ -264,7 +264,7 @@ class OfflineExtractor:
         elif cond:
             hazard, mtype = cond.group(0).strip(), "conditional"
         if hazard:
-            spans.append(QuotedSpan(field="hazard_mechanism", text=hazard))
+            spans.append(QuotedSpan(field="hazard", text=hazard))
 
         return ExtractedFacts(
             fault_description=fault_description,
@@ -272,8 +272,13 @@ class OfflineExtractor:
             alternative_mentioned=bool(alt),
             coping_mentioned=bool(cope),
             impact_status="intermittent" if inter else "ongoing",
-            hazard_mechanism=hazard,
+            hazard_status="described" if hazard else "none",
             mechanism_type=mtype,
+            # Stand-in only: offline never emits "unclear", "sign", a mismatch, harm or worsening.
+            harm_claimed=False,
+            fault_or_sign="fault",
+            claim_mismatch=None,
+            worsening_mentioned=False,
             quoted_spans=spans,
         )
 

@@ -113,7 +113,12 @@ SpanField = Literal[
     "alternative_mentioned",
     "coping_mentioned",
     "impact_status",
-    "hazard_mechanism",
+    "hazard",
+    "harm_claimed",
+    "fault_or_sign",
+    "mismatch_claim",
+    "mismatch_detail",
+    "worsening_mentioned",
 ]
 
 
@@ -138,8 +143,16 @@ class ExtractedFacts(BaseModel):
     alternative_mentioned: bool = False
     coping_mentioned: bool = False
     impact_status: Literal["ongoing", "intermittent"] = "ongoing"
-    hazard_mechanism: Optional[str] = None
+    # §3.2.2 2026-10-04 fields: no defaults, so a response that omits one fails validation
+    # instead of silently reading as "no hazard" / "no harm".
+    hazard_status: Literal["none", "described", "unclear"]
     mechanism_type: Optional[Literal["active", "conditional"]] = None
+    harm_claimed: bool
+    fault_or_sign: Literal["fault", "sign"]
+    # §3.2.2 Field 8 (severity_mismatch in the doc). Renamed: model-facing names must not
+    # invite judging how the tenant writes (CLAUDE.md invariant 3).
+    claim_mismatch: Optional[Literal["over", "under"]]
+    worsening_mentioned: bool
     quoted_spans: list[QuotedSpan] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -156,16 +169,25 @@ class ExtractedFacts(BaseModel):
             required.append("alternative_mentioned")
         if self.coping_mentioned:
             required.append("coping_mentioned")
-        if self.hazard_mechanism:
-            required.append("hazard_mechanism")
+        if self.hazard_status in ("described", "unclear"):
+            required.append("hazard")
+        if self.harm_claimed:
+            required.append("harm_claimed")
+        if self.fault_or_sign == "sign":
+            required.append("fault_or_sign")
+        if self.claim_mismatch is not None:
+            required += ["mismatch_claim", "mismatch_detail"]
+        if self.worsening_mentioned:
+            required.append("worsening_mentioned")
         missing = [f for f in required if f not in cited]
         if missing:
             raise ValueError(f"claimed facts without a quoted span: {missing}")
 
-        if self.hazard_mechanism and self.mechanism_type is None:
-            raise ValueError("hazard_mechanism given without mechanism_type")
-        if not self.hazard_mechanism and self.mechanism_type is not None:
-            raise ValueError("mechanism_type given without hazard_mechanism")
+        # Unclear means no pathway was described, so evaluation picks the safety level, not the model.
+        if self.hazard_status == "described" and self.mechanism_type is None:
+            raise ValueError("mechanism_type: required when hazard_status is 'described'")
+        if self.hazard_status != "described" and self.mechanism_type is not None:
+            raise ValueError(f"mechanism_type: must be null when hazard_status is {self.hazard_status!r}")
         return self
 
 

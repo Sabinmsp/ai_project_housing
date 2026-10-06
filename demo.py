@@ -126,7 +126,7 @@ def main() -> None:
         print(f"  taxonomy_match: {f.taxonomy_match}")
         print(f"  alternative_mentioned={f.alternative_mentioned}  "
               f"coping_mentioned={f.coping_mentioned}  impact_status={f.impact_status}")
-        print(f"  hazard_mechanism: {f.hazard_mechanism!r}  mechanism_type={f.mechanism_type}")
+        print(f"  hazard_status: {f.hazard_status}  mechanism_type={f.mechanism_type}")
         for span in f.quoted_spans:
             print(f"  quote [{span.field}]: {span.text!r}")
         if res.status is ExtractionStatus.OK:

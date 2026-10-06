@@ -44,8 +44,12 @@ GOOD = json.dumps({
     "alternative_mentioned": False,
     "coping_mentioned": False,
     "impact_status": "ongoing",
-    "hazard_mechanism": None,
+    "hazard_status": "none",
     "mechanism_type": None,
+    "harm_claimed": False,
+    "fault_or_sign": "fault",
+    "claim_mismatch": None,
+    "worsening_mentioned": False,
     "quoted_spans": [{"field": "fault_description", "text": "toilet blocked"},
                      {"field": "taxonomy_match", "text": "toilet blocked"}],
 })
@@ -71,7 +75,7 @@ def test_schema_sent_to_model_has_no_scoring_language():
     """Panel A covers everything the model sees, the schema included."""
     text = json.dumps(response_schema()).lower()
     for word in ("dangerous", "standard", "tier", "points", "score", "rank", "priority",
-                 "severity", "urgen"):
+                 "severity", "urgen", "language", "dialect", "english", "tone"):
         assert word not in text, word
 
 
@@ -132,8 +136,8 @@ def test_claim_without_span_rejected():
 
 def test_hazard_needs_mechanism_type():
     bad = json.loads(GOOD)
-    bad["hazard_mechanism"] = "water in light"
-    bad["quoted_spans"].append({"field": "hazard_mechanism", "text": "water in light"})
+    bad["hazard_status"] = "described"
+    bad["quoted_spans"].append({"field": "hazard", "text": "water in light"})
     with pytest.raises(ValueError):
         ExtractedFacts.model_validate(bad)
 
@@ -167,6 +171,74 @@ def test_intermittent_without_span_rejected():
         ExtractedFacts.model_validate(bad)
     bad["quoted_spans"].append({"field": "impact_status", "text": "on and off"})
     assert ExtractedFacts.model_validate(bad).impact_status == "intermittent"
+
+
+# --- 2026-10-04 schema (master §3.2.2) ---------------------------------------
+
+NEW_FIELDS = ["hazard_status", "harm_claimed", "fault_or_sign", "claim_mismatch", "worsening_mentioned"]
+
+
+def good_with(spans=(), **fields):
+    data = json.loads(GOOD)
+    data.update(fields)
+    data["quoted_spans"] += [{"field": f, "text": "quoted"} for f in spans]
+    return data
+
+
+@pytest.mark.parametrize("field", NEW_FIELDS)
+def test_new_field_missing_rejected(field):
+    data = json.loads(GOOD)
+    del data[field]
+    with pytest.raises(ValueError, match=field):
+        ExtractedFacts.model_validate(data)
+
+
+def test_unknown_field_rejected():
+    with pytest.raises(ValueError, match="hazard_mechanism"):
+        ExtractedFacts.model_validate(good_with(hazard_mechanism="water in light"))
+
+
+# Each case is valid once its span is added, so the rejection is the missing span alone.
+@pytest.mark.parametrize("fields, span", [
+    ({"hazard_status": "described", "mechanism_type": "active"}, "hazard"),
+    ({"hazard_status": "unclear"}, "hazard"),
+    ({"harm_claimed": True}, "harm_claimed"),
+    ({"fault_or_sign": "sign"}, "fault_or_sign"),
+    ({"worsening_mentioned": True}, "worsening_mentioned"),
+])
+def test_claim_without_span_rejected_new_fields(fields, span):
+    with pytest.raises(ValueError, match=span):
+        ExtractedFacts.model_validate(good_with(**fields))
+    ExtractedFacts.model_validate(good_with(spans=[span], **fields))
+
+
+@pytest.mark.parametrize("spans, missing", [
+    ([], "mismatch_claim"),
+    (["mismatch_detail"], "mismatch_claim"),
+    (["mismatch_claim"], "mismatch_detail"),
+])
+@pytest.mark.parametrize("direction", ["over", "under"])
+def test_mismatch_needs_both_spans(spans, missing, direction):
+    with pytest.raises(ValueError, match=missing):
+        ExtractedFacts.model_validate(good_with(spans=spans, claim_mismatch=direction))
+    both = ["mismatch_claim", "mismatch_detail"]
+    assert ExtractedFacts.model_validate(good_with(spans=both, claim_mismatch=direction)).claim_mismatch == direction
+
+
+def test_described_without_mechanism_type_rejected():
+    with pytest.raises(ValueError, match="mechanism_type"):
+        ExtractedFacts.model_validate(good_with(spans=["hazard"], hazard_status="described"))
+
+
+@pytest.mark.parametrize("status", ["unclear", "none"])
+def test_mechanism_type_without_described_rejected(status):
+    spans = ["hazard"] if status == "unclear" else []
+    with pytest.raises(ValueError, match="mechanism_type"):
+        ExtractedFacts.model_validate(good_with(spans=spans, hazard_status=status, mechanism_type="active"))
+
+
+def test_response_schema_requires_every_field():
+    assert set(response_schema()["required"]) == set(ExtractedFacts.model_fields)
 
 
 # --- offline reader: Panel B, same fault three phrasings ------------------

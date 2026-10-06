@@ -29,7 +29,7 @@ def panel_d_job(**overrides: Any) -> EnrichedJob:
         "safety_flag": True,
         "safety_level": "active",
         "spans": [
-            VerifiedSpan(field="hazard_mechanism", text="water coming through the light fitting", verified=True),
+            VerifiedSpan(field="hazard", text="water coming through the light fitting", verified=True),
             VerifiedSpan(field="coping_mentioned", text="made up", verified=False),
         ],
         "distance_cost_km": 412,
