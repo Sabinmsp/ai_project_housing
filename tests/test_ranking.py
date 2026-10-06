@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 
@@ -9,9 +9,9 @@ from triage.ranking import NO_TIER_FLAG, SLOT_REASONS, UNTIERED_TIE_REASON, rank
 NOW = datetime(2026, 10, 4, 9, 0, tzinfo=timezone.utc)
 
 
-def job(safety_level: int, tally: int | None, timestamp: datetime = NOW, job_id: UUID | None = None) -> RankInput:
+def job(safety_level: int, tally: int | None, timestamp: datetime = NOW, job_id: str | None = None) -> RankInput:
     return RankInput(
-        job_id=job_id or uuid4(),
+        job_id=job_id or str(uuid4()),
         safety_level=safety_level,
         tally=tally,
         original_timestamp=timestamp,
@@ -37,7 +37,7 @@ def test_older_first_when_safety_and_tally_equal() -> None:
 
 
 def test_job_id_breaks_full_tie_deterministically() -> None:
-    low_id, high_id = sorted([uuid4(), uuid4()])
+    low_id, high_id = "R-0000AAAA", "R-0000BBBB"
     low = job(1, 3, job_id=low_id)
     high = job(1, 3, job_id=high_id)
     forward = sorted([high, low], key=sort_key)
@@ -80,7 +80,7 @@ def test_positions_are_one_to_n_without_gaps() -> None:
 
 
 def test_duplicate_job_id_raises() -> None:
-    shared = uuid4()
+    shared = "R-0000AAAA"
     with pytest.raises(ValueError):
         rank([job(1, 3, job_id=shared), job(2, 4, job_id=shared)])
 
@@ -191,7 +191,7 @@ def test_decided_by_timestamp() -> None:
 
 
 def test_decided_by_job_id() -> None:
-    low_id, high_id = sorted([uuid4(), uuid4()])
+    low_id, high_id = "R-0000AAAA", "R-0000BBBB"
     jobs = [job(1, 3, job_id=high_id), job(1, 3, job_id=low_id)]
     assert decided_by(jobs)[1] == "identical; order arbitrary but fixed"
 

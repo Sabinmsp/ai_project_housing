@@ -9,9 +9,8 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 from typing import Annotated, Literal, Optional
-from uuid import UUID
 
-from pydantic import UUID4, AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Invariant 7: pattern is a regex search, so r"\S" requires at least one non-space character.
 Reason = Annotated[str, Field(pattern=r"\S")]
@@ -22,8 +21,9 @@ class RankInput(BaseModel):
     # extra="forbid": unknown fields (e.g. an override) are rejected, not silently dropped.
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    # §3.4, NFR5: IDs never encode region. UUID4 accepts only random UUIDs, not name- or number-derived ones.
-    job_id: UUID4
+    # §3.4, NFR5: IDs never encode region. str so Stage 1's request_id passes through unchanged;
+    # strict rejects non-str values (e.g. a UUID object) instead of coercing them.
+    job_id: str = Field(strict=True, min_length=1)
     # Safety G3: 0 none, 1 conditional, 2 active. strict blocks coercion, so True or "2" fail.
     safety_level: int = Field(strict=True, ge=0, le=2)
     # Urgency G1/G2: None = no tier. No default, so callers must state it. strict: "4" and 4.0 fail.
@@ -49,7 +49,7 @@ class RankedJob(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     position: int = Field(ge=1)
-    job_id: UUID
+    job_id: str = Field(strict=True, min_length=1)
     flags: tuple[Reason, ...] = ()
     # description is schema metadata only; Pydantic doesn't enforce it.
     decided_by: Reason = Field(description="coordinator-only; tenant renderers must never emit")
@@ -59,7 +59,7 @@ class RankResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     # No tier and no safety trigger: awaits a tier call instead of being ranked.
-    review_band: tuple[UUID, ...]
+    review_band: tuple[str, ...]
     ranked: tuple[RankedJob, ...]
 
 

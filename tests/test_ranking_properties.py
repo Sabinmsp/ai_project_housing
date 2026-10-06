@@ -16,7 +16,7 @@ jobs_strategy = st.lists(
     # st.builds calls RankInput(...) with a value drawn from each strategy.
     st.builds(
         RankInput,
-        job_id=st.uuids(version=4),
+        job_id=st.uuids().map(str),
         safety_level=st.integers(min_value=0, max_value=2),
         tally=st.none() | st.integers(min_value=2, max_value=4),
         original_timestamp=st.datetimes(EARLIEST, LATEST, timezones=st.just(timezone.utc)),

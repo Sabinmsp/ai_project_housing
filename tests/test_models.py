@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from typing import Any
-from uuid import NAMESPACE_DNS, uuid4, uuid5
+from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -10,7 +10,7 @@ from triage.models import RankedJob, RankInput
 
 def valid_job() -> dict[str, Any]:
     return {
-        "job_id": uuid4(),
+        "job_id": str(uuid4()),
         "safety_level": 1,
         "tally": 3,
         "original_timestamp": datetime(2026, 10, 1, 9, 0, tzinfo=timezone.utc),
@@ -23,9 +23,9 @@ def test_valid_job_accepted() -> None:
     assert job.tally == 3
 
 
-def test_non_uuid_job_id_rejected() -> None:
+def test_empty_job_id_rejected() -> None:
     with pytest.raises(ValidationError):
-        RankInput(**{**valid_job(), "job_id": "DAR-0012"})
+        RankInput(**{**valid_job(), "job_id": ""})
 
 
 # parametrize runs the test once per value in the list.
@@ -86,9 +86,10 @@ def test_non_finite_distance_rejected(distance: float) -> None:
         RankInput(**{**valid_job(), "distance_km": distance})
 
 
-def test_non_random_uuid_rejected() -> None:
+# strict str: a UUID object is not coerced to its string form.
+def test_uuid_object_job_id_rejected() -> None:
     with pytest.raises(ValidationError):
-        RankInput(**{**valid_job(), "job_id": uuid5(NAMESPACE_DNS, "DAR-0012")})
+        RankInput(**{**valid_job(), "job_id": uuid4()})
 
 
 @pytest.mark.parametrize("timestamp", [0, "2026-10-01T09:00:00"])
@@ -119,4 +120,4 @@ def test_tally_not_coerced(tally: object) -> None:
 )
 def test_blank_reason_strings_rejected(fields: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
-        RankedJob(**{"position": 1, "job_id": uuid4(), "decided_by": "top of list", **fields})
+        RankedJob(**{"position": 1, "job_id": "R-0000AAAA", "decided_by": "top of list", **fields})
