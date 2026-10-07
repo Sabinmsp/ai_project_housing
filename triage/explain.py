@@ -2,17 +2,28 @@
 
 Pipeline: intake -> extraction -> verification -> evaluation -> ranking -> explain.
 Input: RankResult plus each EnrichedJob. Output: a ReasoningTrace per job, rendered as
-the coordinator view or the tenant SMS; review-band jobs get their own entry.
+the coordinator view, the tenant SMS or the tenant's WHY answer; review-band jobs get
+their own entry.
 Renderers are fixed templates over trace fields, so they can't invent a reason.
 """
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict
 
 from triage.adapter import to_rank_input
-from triage.models import EnrichedJob, RankedJob, RankResult, Reason, VerifiedSpan
+from triage.models import (
+    EnrichedJob,
+    ExtractionResult,
+    ExtractionStatus,
+    RankedJob,
+    RankResult,
+    Reason,
+    VerifiedSpan,
+)
 from triage.ranking import REVIEW_BAND_REASON
 from triage.tiers import TIER_TABLE
 
@@ -42,6 +53,8 @@ class ReasoningTrace(BaseModel):
     decided_by: str
     distance_km: float | None
     logistics_notes: tuple[str, ...]
+    # Coordinator-only: the tenant sent WHY <ref> for this job.
+    tenant_asked_why: bool
 
 
 def _verified_fault_text(job: EnrichedJob) -> str | None:
@@ -64,7 +77,7 @@ def _logistics_notes(job: EnrichedJob) -> tuple[str, ...]:
     return tuple(notes)
 
 
-def build_trace(entry: RankedJob, job: EnrichedJob, queue_length: int) -> ReasoningTrace:
+def build_trace(entry: RankedJob, job: EnrichedJob, queue_length: int, asked_why: bool) -> ReasoningTrace:
     """The trace for one ranked position. Only verified spans are carried."""
     # RankedJob doesn't carry safety_level; the adapter is the one place that maps it.
     safety_level = to_rank_input(job).safety_level
@@ -89,34 +102,206 @@ def build_trace(entry: RankedJob, job: EnrichedJob, queue_length: int) -> Reason
         decided_by=entry.decided_by,
         distance_km=job.distance_cost_km,
         logistics_notes=_logistics_notes(job),
+        tenant_asked_why=asked_why,
     )
 
 
-def build_traces(result: RankResult, jobs: dict[str, EnrichedJob]) -> list[ReasoningTrace]:
-    """One trace per ranked job, in queue order.
+def build_traces(
+    result: RankResult, jobs: dict[str, EnrichedJob], asked_why: frozenset[str] = frozenset()
+) -> list[ReasoningTrace]:
+    """One trace per ranked job, in rank()'s order; asked_why holds the refs a tenant sent WHY for.
 
     Raises:
         KeyError: a ranked job_id is missing from jobs, which is a bug upstream.
     """
-    return [build_trace(entry, jobs[entry.job_id], len(result.ranked)) for entry in result.ranked]
+    return [
+        build_trace(entry, jobs[entry.job_id], len(result.ranked), entry.job_id in asked_why)
+        for entry in result.ranked
+    ]
+
+
+SmsPath = Literal["safety_active", "safety_conditional", "urgent", "routine", "review", "flagged", "out_of_scope"]
+
+_KEEP_UPDATED = "We'll keep you updated."
+
+# Master §5.2: fixed wording only. No tier label, source, verdict on the report, comparison,
+# count of other jobs, timeframe or ranking mechanics. "routine", never "general".
+SMS_PATH_SENTENCES: dict[SmsPath, str] = {
+    "safety_active": "It is marked as a safety job and is being handled as a priority. " + _KEEP_UPDATED,
+    "safety_conditional": "It is marked for a safety check, which a coordinator will do as a priority. "
+    + _KEEP_UPDATED,
+    "urgent": "It's being treated as an urgent repair under NT rules. " + _KEEP_UPDATED,
+    "routine": "It's being treated as a routine repair. " + _KEEP_UPDATED,
+    "review": "It has been sent to a coordinator for a direct review before scheduling. "
+    "We'll update you once that's done.",
+    "flagged": "A coordinator will read your request directly and update you.",
+    "out_of_scope": "A coordinator will contact you to talk through what needs fixing.",
+}
+
+# Safety advice: exact text supplied by Prabin, never generated or paraphrased. Keyed on the
+# taxonomy match only, never on hazard_status: a live probe showed casual gas reports
+# sometimes come back without a hazard, and the advice must still reach them.
+# Source: https://worksafe.nt.gov.au/safety-and-prevention/gas-safety
+GAS_ADVICE = (
+    "If you smell gas: leave the building or area and call Fire and Emergency Services on 000. "
+    "If it is safe to do so, turn off the gas at the cylinder or meter. Do not enter the gas affected area."
+)
+# Source: https://www.powerwater.com.au/customers/safety-and-emergencies
+ELECTRICAL_ADVICE = "Stay away from the exposed wiring. In an emergency call 000."
+SAFETY_ADVICE: dict[str, str] = {"gas leak": GAS_ADVICE, "exposed electrical wires": ELECTRICAL_ADVICE}
+
+SMS_FAULT_MAX = 60  # keeps the whole message near one SMS segment
+
+
+def _plain_fault(text: str | None) -> str | None:
+    """The tenant's own fault words, whitespace collapsed and cut to SMS_FAULT_MAX; None if blank."""
+    words = " ".join((text or "").split())
+    if not words:
+        return None
+    return words if len(words) <= SMS_FAULT_MAX else words[: SMS_FAULT_MAX - 1].rstrip() + "…"
+
+
+def _ranked_path(safety_level: int, tier: str | None) -> SmsPath:
+    # Category word follows the tier, so every dangerous entry (wires, sewage, drains) is urgent.
+    if safety_level == 2:
+        return "safety_active"
+    if safety_level == 1:
+        return "safety_conditional"
+    if tier == "dangerous":
+        return "urgent"
+    if tier == "standard":
+        return "routine"
+    return "review"
+
+
+def _advice(taxonomy_match: Sequence[str]) -> tuple[str, ...]:
+    """The fixed advice lines for a job's taxonomy matches, in SAFETY_ADVICE order."""
+    return tuple(text for entry, text in SAFETY_ADVICE.items() if entry in taxonomy_match)
+
+
+def _reply_line(ref: str) -> str:
+    # §5.2: escalation offer on every message, with no cutoff.
+    return f"Reply HELP with {ref} if anything changes or gets worse."
+
+
+def _sms(ref: str, fault: str | None, path: SmsPath, advice: tuple[str, ...]) -> str:
+    words = _plain_fault(fault)
+    # No quoted placeholder: without the tenant's own fault words, the message names none.
+    opener = f'Housing repair {ref}: we have your report about "{words}".' if words else f"Housing repair {ref}: we have your message."
+    # Advice first, so it is the first thing read in an emergency.
+    return " ".join((*advice, opener, SMS_PATH_SENTENCES[path], _reply_line(ref)))
+
+
+def _named(job: EnrichedJob) -> str:
+    words = _plain_fault(_verified_fault_text(job))
+    return f'"{words}" (ref {job.request_id})' if words else f"a repair (ref {job.request_id})"
+
+
+def tenant_sms(job: EnrichedJob | ExtractionResult) -> str:
+    """The tenant's SMS for one job: its ref, its fault, its path sentence and the reply line.
+
+    An ExtractionResult covers reports that never became a job (flagged for human, out of scope).
+
+    Raises:
+        ValueError: an OK ExtractionResult, whose SMS must come from its EnrichedJob.
+    """
+    # Invariant 10, master §5.2: reads this job only, so no other job, position or decided_by.
+    if isinstance(job, ExtractionResult):
+        if job.status is ExtractionStatus.OK:
+            raise ValueError(f"{job.request_id}: extracted report; build the SMS from its EnrichedJob")
+        path: SmsPath = "flagged" if job.status is ExtractionStatus.FLAGGED_FOR_HUMAN else "out_of_scope"
+        return _sms(job.request_id, None, path, ())
+    path = _ranked_path(to_rank_input(job).safety_level, job.tier)
+    return _sms(job.request_id, _verified_fault_text(job), path, _advice(job.taxonomy_match))
+
+
+def tenant_sms_report(jobs: Sequence[EnrichedJob]) -> str:
+    """One SMS for a whole report: each job's fault and ref, and the refs to reply with.
+
+    Raises:
+        ValueError: no jobs, or jobs from more than one report.
+    """
+    parents = {j.parent_report_id for j in jobs}
+    if len(parents) != 1:
+        raise ValueError(f"tenant_sms_report needs the jobs of exactly one report, got {sorted(parents)}")
+    if len(jobs) == 1:
+        return tenant_sms(jobs[0])
+    # §5.2 C5: N repairs with each ref; N counts this tenant's own repairs only.
+    # "received", not "logged": FR7e forbids "logged" (master §10, B3).
+    named = [_named(j) for j in jobs]
+    # Advice first, each against the fault it is for, never against the whole report.
+    advice = [f"For {name}: {text}" for name, j in zip(named, jobs) for text in _advice(j.taxonomy_match)]
+    refs = ", ".join(j.request_id for j in jobs)
+    return " ".join((
+        *advice,
+        f"Housing repairs: we've received {len(jobs)} repairs from your report: {'; '.join(named)}.",
+        "We'll update you on each one separately.",
+        f"Reply HELP with the ref of any repair that changes or gets worse: {refs}.",
+    ))
 
 
 def render_tenant_sms(trace: ReasoningTrace) -> str:
-    """The tenant's SMS: their own job's facts only."""
-    # Invariant 10, master §5.2: no other job, position, queue length, decided_by or distance.
-    fault = trace.fault_description or "your repair"
-    lines = [f'Housing repair {trace.job_id}: we have your report about "{fault}".']
-    if trace.safety_level > 0:
-        lines.append("It is marked as a safety job.")
-    # No source names or tier labels: plain words the tenant can act on.
-    if trace.tier is None:
-        lines.append("A coordinator is confirming its priority.")
-    elif trace.tier == "dangerous":
-        lines.append("It's being treated as an urgent repair.")
-    else:
-        lines.append("It's being treated as a general repair.")
-    lines.append(f"Reply with {trace.job_id} if things get worse.")
-    return " ".join(lines)
+    """The tenant's SMS for a ranked job, from its trace; same wording as tenant_sms."""
+    # Invariant 10: position, queue_length, decided_by, distance and flags are never read.
+    path = _ranked_path(trace.safety_level, trace.tier)
+    return _sms(trace.job_id, trace.fault_description, path, _advice(trace.taxonomy_match))
+
+
+# Source: FS17 (https://dhlgcd.nt.gov.au/media/documents/fact-sheets/repairs-and-maintenance-fs17.pdf)
+UNKNOWN_REF_REPLY = (
+    "We couldn't find that reference. Please check the number or call the maintenance call centre on 1800 104 076."
+)
+
+_WHY_STATUS: dict[SmsPath, str] = {
+    "safety_active": "is booked as a safety repair.",
+    "safety_conditional": "is booked as a safety repair.",
+    "urgent": "is booked as an urgent repair.",
+    "routine": "is booked as a routine repair.",
+    "review": "is with a coordinator, who is deciding what kind of repair it is.",
+    "flagged": "is with a coordinator, who is deciding what kind of repair it is.",
+    "out_of_scope": "is with a coordinator, who is deciding what kind of repair it is.",
+}
+# Same lines for every job: no fault-specific guessing about impact, no timeframe.
+WHY_IMPACT_LINE = "We know this is hard to live with. A coordinator can see how long it has been waiting."
+_NT_TIME = ZoneInfo("Australia/Darwin")
+
+
+def _why_help_line(ref: str) -> str:
+    return (
+        "If anyone in the house is unwell, elderly or very young, or this is affecting anyone's health or "
+        f"safety, reply HELP {ref} and a coordinator will look at it again."
+    )
+
+
+def _why_subject(ref: str, fault: str | None) -> str:
+    words = _plain_fault(fault)
+    return f'Your "{words}" repair ({ref})' if words else f"Your repair ({ref})"
+
+
+def tenant_why(job: EnrichedJob | ExtractionResult) -> str:
+    """The answer to "WHY <ref>": this job's fault, ref, category word and received date.
+
+    Raises:
+        ValueError: an OK ExtractionResult, whose answer must come from its EnrichedJob.
+    """
+    # Invariant 10: reads this job only, so no position, other job, count or decided_by.
+    # Never explains how jobs are ranked and never states a timeframe.
+    if isinstance(job, ExtractionResult):
+        if job.status is ExtractionStatus.OK:
+            raise ValueError(f"{job.request_id}: extracted report; build the answer from its EnrichedJob")
+        path: SmsPath = "flagged" if job.status is ExtractionStatus.FLAGGED_FOR_HUMAN else "out_of_scope"
+        # No job, so no received date to state.
+        ref = job.request_id
+        return " ".join((f"{_why_subject(ref, None)} {_WHY_STATUS[path]}", WHY_IMPACT_LINE, _why_help_line(ref)))
+    ref = job.request_id
+    path = _ranked_path(to_rank_input(job).safety_level, job.tier)
+    received = job.original_report_timestamp.astimezone(_NT_TIME)
+    return " ".join((
+        f"{_why_subject(ref, _verified_fault_text(job))} {_WHY_STATUS[path]}",
+        f"Yours was received on {received.day} {received:%B %Y}.",
+        WHY_IMPACT_LINE,
+        _why_help_line(ref),
+    ))
 
 
 def _source_text(source: str, tier: str) -> str:
@@ -160,6 +345,7 @@ def render_coordinator(trace: ReasoningTrace) -> str:
         ("original_timestamp", trace.original_timestamp.isoformat(), "FIFO input, never overwritten"),
         ("position", f"{trace.position} of {trace.queue_length}", ""),
         ("decided_by", trace.decided_by, ""),
+        *([("tenant_contact", "tenant asked why", "")] if trace.tenant_asked_why else []),
         (
             "distance",
             "distance unknown" if trace.distance_km is None else f"{trace.distance_km:g} km",
@@ -170,10 +356,11 @@ def render_coordinator(trace: ReasoningTrace) -> str:
     return _table(rows)
 
 
-def render_review_entry(job: EnrichedJob) -> str:
+def render_review_entry(job: EnrichedJob, asked_why: bool = False) -> str:
     """The coordinator's entry for a review-band job, which has no position."""
     return _table(
         [
+            *([("tenant_contact", "tenant asked why", "")] if asked_why else []),
             ("job_id", job.request_id, ""),
             ("fault", _verified_fault_text(job) or "(no verified fault text)", ""),
             ("community", job.community, ""),

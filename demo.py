@@ -17,7 +17,15 @@ from pathlib import Path
 from triage.adapter import to_rank_input
 from triage.distances import load_distances
 from triage.evaluation import evaluate
-from triage.explain import build_traces, render_coordinator, render_review_entry, render_tenant_sms
+from triage.explain import (
+    UNKNOWN_REF_REPLY,
+    build_traces,
+    render_coordinator,
+    render_review_entry,
+    tenant_sms,
+    tenant_sms_report,
+    tenant_why,
+)
 from triage.extraction import LLMClient, OfflineExtractor, OpenAICompatibleClient, extract
 from triage.intake import DuplicateRequestError, SQLiteReportRepository, new_request_id
 from triage.models import (ChildJob, EnrichedJob, ExtractedFacts, ExtractionStatus, Report, ReportExtraction,
@@ -159,6 +167,7 @@ def main(argv: list[str] | None = None) -> None:
                        help="regex test double; never builds the API client (CI, local gate)")
     modes.add_argument("--record", action="store_true",
                        help=f"live run that also saves every response to {RECORDED_DIR.name}/ (needs a key)")
+    parser.add_argument("--why", metavar="REF", help="print the tenant's answer to 'WHY REF' for that job")
     args = parser.parse_args(argv)
     folder = args.folder
     if not folder.is_dir():
@@ -198,11 +207,14 @@ def main(argv: list[str] | None = None) -> None:
     # ---- extraction (the only model call) ------------------------------------
     _heading(f"EXTRACTION (model reads only)   extractor: {client.name}")
     extracted = []
+    not_extracted = {}  # flagged for human / out of scope: no job, but the tenant can still ask WHY
     for report in repo.all():
         res = extract(report, client)
         print(f"\n{report.request_id}  status={res.status.value}  attempts={res.attempts}")
         if res.extraction is None:
             print(f"  -> coordinator follow-up: {res.errors}")
+            print("  SMS:", tenant_sms(res))
+            not_extracted[res.request_id] = res
             continue
         for f in res.extraction.faults:
             print(f"  fault_description: {f.fault_description!r}")
@@ -218,6 +230,8 @@ def main(argv: list[str] | None = None) -> None:
             extracted.append((report, res.extraction))
         else:
             print("  -> no fault named: out of scope, coordinator contacts tenant")
+            print("  SMS:", tenant_sms(res))
+            not_extracted[res.request_id] = res
 
     # ---- verification, evaluation, logistics stand-in -------------------------
     jobs = []
@@ -226,6 +240,10 @@ def main(argv: list[str] | None = None) -> None:
         _save_children(repo, extraction, report_jobs)
         jobs.extend(report_jobs)
     _heading("VERIFICATION + EVALUATION (code)   distance is a static stand-in for logistics")
+    for report, _ in extracted:
+        children = [j for j in jobs if j.parent_report_id == report.request_id]
+        if len(children) > 1:
+            print(f"\n{report.request_id}  compound report SMS:", tenant_sms_report(children))
 
     # ---- ranking + explain (why-trace) ---------------------------------------
     by_id = {job.request_id: job for job in jobs}
@@ -234,13 +252,23 @@ def main(argv: list[str] | None = None) -> None:
     print("\nREVIEW BAND (held above and outside the sort)")
     for job_id in result.review_band:
         print(f"\n{job_id}{origin(job_id)}")
-        print(render_review_entry(by_id[job_id]))
+        print(render_review_entry(by_id[job_id], asked_why=job_id == args.why))
+        print("SMS:", tenant_sms(by_id[job_id]))
 
     print("\nRANKED QUEUE  sort_key = (-safety_level, tally-less first, -tally, original_timestamp, job_id)")
-    for tr in build_traces(result, by_id):
+    for tr in build_traces(result, by_id, frozenset({args.why} if args.why else ())):
         print(f"\n#{tr.position}{origin(tr.job_id)}")
         print(render_coordinator(tr))
-        print("SMS:", render_tenant_sms(tr))
+        print("SMS:", tenant_sms(by_id[tr.job_id]))
+
+    if args.why:
+        _heading(f"TENANT ASKED: WHY {args.why}")
+        if args.why in by_id:
+            print(tenant_why(by_id[args.why]))
+        elif args.why in not_extracted:
+            print(tenant_why(not_extracted[args.why]))
+        else:
+            print(UNKNOWN_REF_REPLY)
 
 
 if __name__ == "__main__":

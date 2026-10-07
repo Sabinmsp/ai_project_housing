@@ -12,7 +12,7 @@ from triage.evaluation import Evaluation, evaluate
 from triage.extraction import OfflineExtractor
 from triage.escalation import escalate
 from triage.intake import SQLiteReportRepository, create_report
-from triage.explain import ReasoningTrace, build_traces, render_tenant_sms
+from triage.explain import UNKNOWN_REF_REPLY, ReasoningTrace, build_traces, render_tenant_sms
 from triage.models import EnrichedJob, ExtractedFacts, Report, ReportExtraction
 from triage.ranking import rank
 from triage.report_files import parse_report_text, read_text
@@ -433,3 +433,40 @@ def test_demo_run_stores_compound_children_for_escalation(tmp_path: Path, store:
     demo.main([str(folder)])
     ((repo, jobs),) = seen
     assert [repo.get_child(j.request_id).facts for j in jobs] == [WIRE, GAS]
+
+
+WHY_REPORT = """Tenant ID: T-07
+Community: Wadeye
+Source: tenant_direct
+Reported: 2026-09-23 09:15
+Request ID: R-0000ABCD
+Message:
+toilet blocked
+"""
+
+
+def run_demo(tmp_path: Path, capsys: pytest.CaptureFixture[str], *args: str) -> str:
+    (tmp_path / "r1.txt").write_text(WHY_REPORT, encoding="utf-8")
+    demo.main([str(tmp_path), "--offline", *args])
+    return capsys.readouterr().out
+
+
+def test_why_flag_prints_the_tenant_answer_and_marks_the_coordinator_view(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = run_demo(tmp_path, capsys, "--why", "R-0000ABCD")
+    answer = out.split("TENANT ASKED: WHY R-0000ABCD")[1]
+    assert 'Your "toilet blocked" repair (R-0000ABCD) is booked as an urgent repair.' in answer
+    assert "business days" not in answer and "within" not in answer
+    assert "tenant asked why" in out.split("TENANT ASKED")[0]
+
+
+def test_why_flag_with_unknown_ref_gives_call_centre_reply(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = run_demo(tmp_path, capsys, "--why", "R-FFFF0000")
+    assert out.rstrip().endswith(UNKNOWN_REF_REPLY)
+    assert "tenant asked why" not in out
+
+
+def test_no_why_flag_marks_nothing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = run_demo(tmp_path, capsys)
+    assert "tenant asked why" not in out and "TENANT ASKED" not in out

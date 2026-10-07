@@ -63,6 +63,8 @@ No test calls the API: `tests/conftest.py` blocks the OpenAI client.
 - `.github/` CI workflow: install, `pytest -q`, `python demo.py --offline`.
 - `app/` placeholder for the coordinator UI (not built).
 - `data/` distance table, recorded model responses, and a placeholder for synthetic reports.
+  - `communities.json`: NT community coordinates (not read by code yet).
+  - `housing_offices.json`: NT regional housing offices (not read by code yet).
 - `pdf/` sample GEH repair request forms (synthetic).
 - `reports/` the six synthetic reports the demo reads by default.
 - `scripts/` `probe_llm.py`, a manual, paid probe of the live extractor.
@@ -109,6 +111,7 @@ power point in the kitchen is sparking and smells like burning
 - A `Report` carries only intake fields.
 
 ## Limitations
+
 
 - Logistics (distance, trade capacity, bundling) is not built; `demo.py` shows distance for display only.
 - No real fault-report data exists; every report and form here is synthetic.
