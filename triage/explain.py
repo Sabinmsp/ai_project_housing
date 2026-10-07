@@ -379,8 +379,9 @@ def _second_reader_rows(reading: SecondReading | None) -> list[tuple[str, str, s
 def _reread_rows(record: ReRead | None) -> list[tuple[str, str, str]]:
     if record is None:
         return []
-    second = record.read_2 or "unavailable"
-    return [("re_read", f"read 1: {record.read_1}; read 2: {second}; used: {record.used}", "safer reading kept")]
+    if record.read_2 is None:
+        return [("re_read", f"read 1: {record.read_1}; read 2: unavailable ({record.unavailable_reason}); used: read 1", "")]
+    return [("re_read", f"read 1: {record.read_1}; read 2: {record.read_2}; used: {record.used}", "safer reading kept")]
 
 
 def _distance_row(km: float | None, office: str | None) -> tuple[str, str, str]:

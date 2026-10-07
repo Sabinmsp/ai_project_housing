@@ -259,7 +259,7 @@ def main(argv: list[str] | None = None) -> None:
             again = extract(report, client)
             faults = list(extraction.faults)
             for i in triggered:
-                faults[i], record, flags = reread.combine(faults[i], again)
+                faults[i], record, flags = reread.combine(faults[i], again, single=len(faults) == 1)
                 records[i] = (record, flags)
             extraction = ReportExtraction(faults=tuple(faults))
         report_jobs = []

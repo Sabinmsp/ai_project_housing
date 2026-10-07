@@ -39,8 +39,13 @@ def reading(facts: ExtractedFacts) -> HazardReading:
     return facts.hazard_status
 
 
-def _match(read_1: ExtractedFacts, rereads: tuple[ExtractedFacts, ...]) -> ExtractedFacts | None:
-    """The re-read fault matching read 1 by taxonomy (never position); the safest if several."""
+def _match(read_1: ExtractedFacts, rereads: tuple[ExtractedFacts, ...], single: bool) -> ExtractedFacts | None:
+    """The re-read fault matching read 1: directly when both reads name one fault, else by
+    taxonomy (never position), the safest if several."""
+    if single and len(rereads) == 1:
+        # One fault each: they describe the same thing, so no taxonomy is needed (e.g. an
+        # unlisted fault, whose taxonomy is empty).
+        return rereads[0]
     names = set(read_1.taxonomy_match)
     if not names:
         return None
@@ -58,23 +63,30 @@ def _with_hazard_of(read_1: ExtractedFacts, read_2: ExtractedFacts) -> Extracted
     })
 
 
-def combine(read_1: ExtractedFacts, reread: ExtractionResult) -> tuple[ExtractedFacts, ReRead, tuple[str, ...]]:
-    """The facts to evaluate, the record of both readings, and the coordinator flags."""
+def _unavailable(read_1: ExtractedFacts, why: str) -> tuple[ExtractedFacts, ReRead, tuple[str, ...]]:
+    record = ReRead(read_1=reading(read_1), read_2=None, unavailable_reason=why, used="read 1")
+    return read_1, record, (f"Re-read unavailable — {why}; read 1 kept. Check.",)
+
+
+def combine(read_1: ExtractedFacts, reread: ExtractionResult,
+            single: bool) -> tuple[ExtractedFacts, ReRead, tuple[str, ...]]:
+    """The facts to evaluate, the record of both readings, and the coordinator flags.
+
+    single: read 1 of this report named exactly one fault.
+    """
     first = reading(read_1)
     if reread.status is not ExtractionStatus.OK or reread.extraction is None:
-        why = "; ".join(reread.errors)[:200] or reread.status.value
-        return read_1, ReRead(read_1=first, read_2=None, used="read 1"), (
-            f"Re-read unavailable — {why}; read 1 kept. Check.",)
-    match = _match(read_1, reread.extraction.faults)
+        return _unavailable(read_1, "; ".join(reread.errors)[:200] or reread.status.value)
+    match = _match(read_1, reread.extraction.faults, single)
     if match is None:
-        return read_1, ReRead(read_1=first, read_2=None, used="read 1"), (
-            f"Re-read unavailable — no re-read fault matches taxonomy {read_1.taxonomy_match}; read 1 kept. Check.",)
+        return _unavailable(read_1, f"no re-read fault matches taxonomy {read_1.taxonomy_match}")
     second = reading(match)
     flags = () if second == first else (
         f"Readings inconsistent — read 1: {first}, read 2: {second}; the safer reading is used. Check.",)
     if READING_ORDER.index(second) > READING_ORDER.index(first):
-        return _with_hazard_of(read_1, match), ReRead(read_1=first, read_2=second, used="read 2"), flags
-    return read_1, ReRead(read_1=first, read_2=second, used="read 1"), flags
+        return _with_hazard_of(read_1, match), ReRead(read_1=first, read_2=second, unavailable_reason=None,
+                                                      used="read 2"), flags
+    return read_1, ReRead(read_1=first, read_2=second, unavailable_reason=None, used="read 1"), flags
 
 
 def attach(job: EnrichedJob, record: ReRead, flags: tuple[str, ...]) -> EnrichedJob:

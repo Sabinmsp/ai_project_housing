@@ -293,9 +293,19 @@ class ReRead(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     read_1: HazardReading
-    # None: the re-read failed validation, or found no fault matching this one's taxonomy.
+    # None: the re-read failed validation, or found no fault matching this one.
     read_2: Optional[HazardReading]
+    # Why read 2 is unavailable; set exactly when read_2 is None.
+    unavailable_reason: Optional[Reason]
     used: Literal["read 1", "read 2"]
+
+    @model_validator(mode="after")
+    def _reason_iff_unavailable(self) -> "ReRead":
+        if (self.read_2 is None) != (self.unavailable_reason is not None):
+            raise ValueError("unavailable_reason must be set exactly when read_2 is None")
+        if self.read_2 is None and self.used != "read 1":
+            raise ValueError("an unavailable re-read can't be used")
+        return self
 
 
 class EnrichedJob(BaseModel):
