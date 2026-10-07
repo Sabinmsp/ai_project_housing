@@ -1,5 +1,7 @@
 """Probe the real LLM extractor on fixed samples and save every response to scratch/probe/.
 
+Exercises extraction and verification exactly as extract() would, outside the pipeline.
+Input: SAMPLES below. Output: a table on stdout and one JSON file per run.
 Manual tool only: it calls the paid API, so no test or CI runs it.
 Usage: python scripts/probe_llm.py [--runs N]
 """
@@ -38,11 +40,12 @@ OUT_DIR = ROOT / "scratch" / "probe"
 
 
 def _api_key() -> str | None:
-    # Same lookup as default_client(); an empty value counts as no key.
+    """TRIAGE_API_KEY or OPENAI_API_KEY; an empty value counts as no key."""
     return os.environ.get("TRIAGE_API_KEY") or os.environ.get("OPENAI_API_KEY") or None
 
 
 def _redact(text: str, key: str) -> str:
+    """text with the API key replaced by <redacted>."""
     # Provider errors can echo part of the key; never let it reach the screen or scratch/.
     return text.replace(key, "<redacted>") if key else text
 
@@ -74,6 +77,7 @@ def probe_once(client: OpenAICompatibleClient, sample: str, key: str) -> dict:
 
 
 def table_rows(index: int, run: int, record: dict) -> list[str]:
+    """One summary row per extracted fault, or one ERROR / no-fault row."""
     head = f"{index:<2} {run:<3}"
     if record["error"]:
         return [f"{head} {'-':<2} ERROR {' '.join(record['error'].split())[:110]}"]  # full text is in the file
@@ -93,6 +97,7 @@ def table_rows(index: int, run: int, record: dict) -> list[str]:
 
 
 def main() -> int:
+    """Run every sample --runs times; returns 1 when there is no key or no openai package."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--runs", type=int, default=3, help="runs per sample (default 3)")
     args = parser.parse_args()

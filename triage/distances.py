@@ -1,4 +1,8 @@
-"""The static NT distance table (km from Darwin): logistics display only, never read by ranking."""
+"""The static NT distance table (km from Darwin) for the logistics display.
+
+Input: data/distances.json. Output: community name -> km. Never read by ranking
+(invariant 5): distance must not move a job up or down the queue.
+"""
 
 import json
 from pathlib import Path

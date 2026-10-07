@@ -1,11 +1,12 @@
-"""End-to-end demo of Stages 1, 2 and 6.
+"""Run the whole pipeline on a folder of reports and print each stage.
 
-Stages 3 to 5 belong to teammates. The `_standin_*` functions below are
-minimal placeholders so the demo runs; replace them with the real modules
-once they land.
+Pipeline: intake -> extraction -> verification -> evaluation -> ranking -> explain.
+Input: a folder of .pdf/.txt reports (default reports/; layout in triage/report_files.py).
+Output: the ranked queue, review band, coordinator why-traces and tenant SMS on stdout.
+Logistics is not built yet: `_build_job` runs the real verification and evaluation and
+attaches distance from a static table as a stand-in.
 
-Reports are read from the reports/ folder (one .pdf or .txt per report; see
-triage/report_files.py for the layout). Run: python demo.py [folder]
+Run: python demo.py [folder] [--offline | --record]
 """
 import argparse
 import os
@@ -13,29 +14,34 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from triage.adapter import to_rank_input
+from triage.distances import load_distances
+from triage.evaluation import evaluate
+from triage.explain import build_traces, render_coordinator, render_review_entry, render_tenant_sms
 from triage.extraction import LLMClient, OfflineExtractor, OpenAICompatibleClient, extract
 from triage.intake import DuplicateRequestError, SQLiteReportRepository, new_request_id
 from triage.models import (ChildJob, EnrichedJob, ExtractedFacts, ExtractionStatus, Report, ReportExtraction,
                            VerifiedSpan)
-from triage.adapter import to_rank_input
-from triage.evaluation import evaluate
-from triage.distances import load_distances
-from triage.recording import RECORDED_DIR, RecordedClient, RecordingClient
-from triage.verification import claim_spans, verify_spans
-from triage.explain import build_traces, render_coordinator, render_review_entry, render_tenant_sms
 from triage.ranking import rank
+from triage.recording import RECORDED_DIR, RecordedClient, RecordingClient
 from triage.report_files import load_reports
+from triage.verification import claim_spans, verify_spans
 
 REPORTS_DIR = Path(__file__).with_name("reports")
 
-# ---- stand-ins for teammates' stages (NOT part of Stages 1, 2, 6) --------
+# ---- stand-in until logistics is built: real verification + evaluation, distance lookup --
 _STANDIN_DISTANCE = load_distances()
 
 
 _SAFETY_LEVEL_NAMES = ("none", "conditional", "active")  # index = safety level
 
 
-def _standin_stages_3_to_5(report, facts, job_id: str | None = None, extra_flags: tuple[str, ...] = ()) -> EnrichedJob:
+def _build_job(report, facts, job_id: str | None = None, extra_flags: tuple[str, ...] = ()) -> EnrichedJob:
+    """Verify, evaluate and add distance for one fault, giving the EnrichedJob ranking reads.
+
+    Raises:
+        ValueError: the fault has no description (extract() should have routed it out of scope).
+    """
     unverified = verify_spans(report.raw_text, facts)
     # Spans that back no claim (e.g. impact_status quoting "ongoing") are left out entirely.
     spans = [VerifiedSpan(field=s.field, text=s.text, verified=(s.field, s.text) not in unverified)
@@ -76,13 +82,13 @@ def _duplicate_flags(faults: Sequence[ExtractedFacts], ids: Sequence[str]) -> li
     return flags
 
 
-def _standin_jobs(report: Report, extraction: ReportExtraction) -> list[EnrichedJob]:
-    """One job per fault, none dropped or merged. [] never gets here: extract() routes it out of scope."""
+def _build_jobs(report: Report, extraction: ReportExtraction) -> list[EnrichedJob]:
+    """One job per fault, none dropped or merged. An empty faults list never gets here."""
     faults = extraction.faults
     # One fault keeps the report's id. In a compound report every job gets its own id, so none
     # is mistaken for the report itself; parent_report_id links them back.
     ids = [report.request_id] if len(faults) == 1 else [new_request_id() for _ in faults]
-    return [_standin_stages_3_to_5(report, facts, job_id, dups)
+    return [_build_job(report, facts, job_id, dups)
             for facts, job_id, dups in zip(faults, ids, _duplicate_flags(faults, ids))]
 # --------------------------------------------------------------------------
 
@@ -135,14 +141,17 @@ def _load_dotenv(path: Path = Path(__file__).with_name(".env")) -> None:
 
 
 def _heading(title: str) -> None:
+    """Print a stage banner."""
     print(f"\n{'=' * 78}\n{title}\n{'=' * 78}")
 
 
 def _one_line(text: str) -> str:
+    """Show follow-up lines on one line, separated by " | "."""
     return text.replace("\n", " | ")
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Parse arguments, pick the extraction client, and run every stage on the folder."""
     parser = argparse.ArgumentParser(description="Run the triage pipeline on a folder of reports.")
     parser.add_argument("folder", nargs="?", type=Path, default=REPORTS_DIR)
     modes = parser.add_mutually_exclusive_group()
@@ -157,14 +166,14 @@ def main(argv: list[str] | None = None) -> None:
     repo = SQLiteReportRepository()
     client = _choose_client(args.offline, args.record)
 
-    # ---- STAGE 1: intake ---------------------------------------------------
+    # ---- intake --------------------------------------------------------------
     reports, skipped = load_reports(folder)
     for report in reports:
         try:
             repo.save(report)
         except DuplicateRequestError:
             skipped.append((Path(report.request_id), "duplicate request_id"))
-    _heading(f"STAGE 1 - INTAKE (code)   {len(reports)} reports from {folder}/")
+    _heading(f"INTAKE (code)   {len(reports)} reports from {folder}/")
     for path, why in skipped:
         print(f"  skipped {path.name}: {why}")
     if not reports:
@@ -186,8 +195,8 @@ def main(argv: list[str] | None = None) -> None:
               + (f"  ({r.timestamp_source})" if r.timestamp_source else ""))
         print(f"  raw_text: {_one_line(r.raw_text)!r}")
 
-    # ---- STAGE 2: extraction (the only model call) -------------------------
-    _heading(f"STAGE 2 - EXTRACTION (model reads only)   extractor: {client.name}")
+    # ---- extraction (the only model call) ------------------------------------
+    _heading(f"EXTRACTION (model reads only)   extractor: {client.name}")
     extracted = []
     for report in repo.all():
         res = extract(report, client)
@@ -210,18 +219,18 @@ def main(argv: list[str] | None = None) -> None:
         else:
             print("  -> no fault named: out of scope, coordinator contacts tenant")
 
-    # ---- STAGES 3-5: teammates (placeholders in this demo) ----------------
+    # ---- verification, evaluation, logistics stand-in -------------------------
     jobs = []
     for report, extraction in extracted:
-        report_jobs = _standin_jobs(report, extraction)
+        report_jobs = _build_jobs(report, extraction)
         _save_children(repo, extraction, report_jobs)
         jobs.extend(report_jobs)
-    _heading("STAGES 3-5 - teammates' stages (placeholders here, output not shown)")
+    _heading("VERIFICATION + EVALUATION (code)   distance is a static stand-in for logistics")
 
-    # ---- STAGE 6: ranking + why-trace -------------------------------------
+    # ---- ranking + explain (why-trace) ---------------------------------------
     by_id = {job.request_id: job for job in jobs}
     result = rank([to_rank_input(job) for job in jobs])
-    _heading("STAGE 6 - RANKING + WHY-TRACE (code)")
+    _heading("RANKING + WHY-TRACE (code)")
     print("\nREVIEW BAND (held above and outside the sort)")
     for job_id in result.review_band:
         print(f"\n{job_id}{origin(job_id)}")

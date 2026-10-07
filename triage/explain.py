@@ -1,3 +1,11 @@
+"""Explain: the why-trace for each ranked job, and its renderers.
+
+Pipeline: intake -> extraction -> verification -> evaluation -> ranking -> explain.
+Input: RankResult plus each EnrichedJob. Output: a ReasoningTrace per job, rendered as
+the coordinator view or the tenant SMS; review-band jobs get their own entry.
+Renderers are fixed templates over trace fields, so they can't invent a reason.
+"""
+
 from datetime import datetime
 from typing import Literal
 
@@ -9,7 +17,6 @@ from triage.ranking import REVIEW_BAND_REASON
 from triage.tiers import TIER_TABLE
 
 
-
 class ReasoningTrace(BaseModel):
     """Structured explanation. Both renderers read this and nothing else."""
 
@@ -18,7 +25,7 @@ class ReasoningTrace(BaseModel):
     job_id: str
     fault_description: str | None
     taxonomy_match: tuple[str, ...]
-    # None: untiered safety job, ranked but awaiting a tier call (invariant 6).
+    # None: untiered safety job, ranked but awaiting a tier call (invariant 5).
     tier: Literal["dangerous", "standard"] | None
     tier_entry: str | None
     base_points: int | None
@@ -38,8 +45,8 @@ class ReasoningTrace(BaseModel):
 
 
 def _verified_fault_text(job: EnrichedJob) -> str | None:
-    # Panel D: no trace value originates inside the model. fault_description is the model's
-    # wording and may be paraphrased, so only a Stage 3 verified span is used.
+    # No trace text comes from the model's own wording: fault_description may be paraphrased,
+    # so only a verified span (the tenant's words) is shown.
     return next((s.text for s in job.spans if s.verified and s.field == "fault_description"), None)
 
 
@@ -58,6 +65,7 @@ def _logistics_notes(job: EnrichedJob) -> tuple[str, ...]:
 
 
 def build_trace(entry: RankedJob, job: EnrichedJob, queue_length: int) -> ReasoningTrace:
+    """The trace for one ranked position. Only verified spans are carried."""
     # RankedJob doesn't carry safety_level; the adapter is the one place that maps it.
     safety_level = to_rank_input(job).safety_level
     return ReasoningTrace(
@@ -73,7 +81,7 @@ def build_trace(entry: RankedJob, job: EnrichedJob, queue_length: int) -> Reason
         safety_level=safety_level,
         safety_reason=job.safety_reason,
         evidence_spans=tuple(s for s in job.spans if s.verified),
-        # Stage 3-5 flags first, then ranking's own (e.g. the no-tier flag).
+        # Evaluation and logistics flags first, then ranking's own (e.g. the no-tier flag).
         flags=(*job.flags, *entry.flags),
         original_timestamp=job.original_report_timestamp,
         position=entry.position,
@@ -85,13 +93,17 @@ def build_trace(entry: RankedJob, job: EnrichedJob, queue_length: int) -> Reason
 
 
 def build_traces(result: RankResult, jobs: dict[str, EnrichedJob]) -> list[ReasoningTrace]:
-    # A missing job_id raises KeyError: a ranked job with no source data is a bug.
+    """One trace per ranked job, in queue order.
+
+    Raises:
+        KeyError: a ranked job_id is missing from jobs, which is a bug upstream.
+    """
     return [build_trace(entry, jobs[entry.job_id], len(result.ranked)) for entry in result.ranked]
 
 
 def render_tenant_sms(trace: ReasoningTrace) -> str:
-    # Pure template: every word is fixed text or a trace field, so it cannot invent a reason.
-    # §5.2: own-job facts only, so no position, queue length, decided_by or distance.
+    """The tenant's SMS: their own job's facts only."""
+    # Invariant 10, master §5.2: no other job, position, queue length, decided_by or distance.
     fault = trace.fault_description or "your repair"
     lines = [f'Housing repair {trace.job_id}: we have your report about "{fault}".']
     if trace.safety_level > 0:
@@ -121,6 +133,11 @@ def _table(rows: list[tuple[str, str, str]]) -> str:
 
 
 def render_coordinator(trace: ReasoningTrace) -> str:
+    """The coordinator's full why-trace as an aligned table.
+
+    Raises:
+        ValueError: a tiered trace has no tier_entry whose sources it can cite.
+    """
     rows = [("job_id", trace.job_id, "")]
     rows += [("taxonomy_match", m, "(reference list name)") for m in trace.taxonomy_match]
     if trace.tier is None:
@@ -137,7 +154,7 @@ def render_coordinator(trace: ReasoningTrace) -> str:
             ("urgency_tally", str(trace.urgency_tally), f"({trace.base_points} + {trace.severity_bump})"),
         ]
     rows.append(("safety_level", str(trace.safety_level), f"({trace.safety_reason})"))
-    rows += [(f"span:{s.field}", f'"{s.text}"', "verified [3]") for s in trace.evidence_spans]
+    rows += [(f"span:{s.field}", f'"{s.text}"', "verified") for s in trace.evidence_spans]
     rows += [("flag", f, "") for f in trace.flags]
     rows += [
         ("original_timestamp", trace.original_timestamp.isoformat(), "FIFO input, never overwritten"),
@@ -154,6 +171,7 @@ def render_coordinator(trace: ReasoningTrace) -> str:
 
 
 def render_review_entry(job: EnrichedJob) -> str:
+    """The coordinator's entry for a review-band job, which has no position."""
     return _table(
         [
             ("job_id", job.request_id, ""),

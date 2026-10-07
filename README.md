@@ -1,59 +1,73 @@
-# Triage pipeline: Stages 1, 2 and 6
+# Housing maintenance triage
 
-Sabin's part of the six-stage housing maintenance triage pipeline.
+Ranks repair reports from remote Northern Territory housing so that safety comes first, then urgency, then first-reported.
+A model reads each report for facts and quotes the tenant's words; plain code applies every rule, so the model never sets a tier, score or position.
 
-| Stage | File | What it does |
-|---|---|---|
-| 1 Intake | `triage/intake.py`, `triage/report_files.py` | Wraps raw text in a `Report`, stamps `request_id`, `source_tag`, `community`, `original_report_timestamp`. SQLite repo behind an interface. Escalation appends text by exact `request_id`; the timestamp never changes. Reports are read from files in `reports/`; a file with a missing or bad field is skipped and listed, never guessed. |
-| 2 Extraction | `triage/extraction.py` | The only model call. The model sees the report text and fault NAMES only (no tiers, points or ranks). Structured output, validated with Pydantic; retry once, then `FLAGGED_FOR_HUMAN`. Offline keyword reader with the same contract for demos with no API key. |
-| 6 Ranking | `triage/ranking.py` | Pure function. `sort_key = (safety_flag, urgency_tally, -original_timestamp)`. Review-band jobs are held outside the sort. Builds a `ReasoningTrace` per job (taxonomy match + verified spans, tier + source, defaults applied, arithmetic, safety reason, original timestamp, position, logistics); two template renderers (tenant SMS, coordinator view) read only the trace. No LLM: only Stage 2 calls a model. |
-
-`triage/models.py` is the shared contract, including `EnrichedJob`, the shape Stage 6 expects from Stages 3 to 5.
-
-## Data flow
+## Pipeline
 
 ```
 reports/*.pdf|.txt
-   │  report_files.load_reports()
+   │  report_files.load_reports()   (GEH forms: geh_form.parse_geh_form, one Report per issue)
    ▼
-[1] intake.create_report() ──► Report {request_id, tenant_id, raw_text, source_tag,
-   │  repo.save()                      community, original_report_timestamp}
+intake          intake.create_report()  ──► Report {request_id, tenant_id, raw_text, source_tag,
+   │            repo.save()                       community, original_report_timestamp}
    ▼
-[2] extraction.extract()  ──► raw_text + fault NAMES ──► LLM (structured output)
-   │                          ◄── JSON ── Pydantic ExtractedFacts (retry once, then human)
-   ▼  ExtractedFacts {fault_description, taxonomy_match[], alternative_mentioned,
-   │                  coping_mentioned, impact_status, hazard_mechanism,
-   │                  mechanism_type, quoted_spans[]}
+extraction      extraction.extract()  ──► report text + fault names ──► model (structured output)
+   │            ◄── ReportExtraction {faults: ExtractedFacts[]}, validated; retry once, then flag
    ▼
-[3][4][5] teammates  ──► EnrichedJob {safety_flag, urgency_tally, timestamp, tier,
-   │                                  spans, taxonomy_match, logistics...}
+verification    verification.verify_spans()  ──► quotes not found in the report text
    ▼
-[6] ranking.rank()  ──► sort_key = (safety_flag, urgency_tally, -timestamp)
-                    ──► RankingResult {review_band, ranked, traces[ReasoningTrace]}
-                    ──► render_coordinator(trace), render_tenant_sms(trace)
-```
+evaluation      evaluation.evaluate()  ──► tier, urgency tally, safety level, flags with reasons
+   ▼            (logistics not built: demo.py adds distance for display only)
+ranking         adapter.to_rank_input() ──► ranking.rank() ──► RankResult {review_band, ranked}
+   ▼            sort_key = (-safety_level, tally-less first, -tally, original_timestamp, job_id)
+explain         explain.build_traces() ──► render_coordinator(), render_tenant_sms(),
+                render_review_entry()
 
-Model reads, code decides: the only model call is in Stage 2, and nothing it returns is a number, tier or rank.
+escalation      escalation.escalate(): follow-up appended by exact ID ──► re-enters extraction;
+                original_report_timestamp is never changed
+```
 
 ## Run
 
 ```bash
 pip install -r requirements.txt
-pytest -q                  # includes Hypothesis property tests
-python demo.py             # ranks every report in reports/ — no key needed (recorded mode)
-python demo.py some/folder # or any other folder
+python demo.py              # recorded mode when no API key is set
+python demo.py --offline    # regex test double, never calls the API (what CI runs)
+python demo.py --record     # live, and saves every response to data/recorded/
+python demo.py pdf          # any folder of reports, e.g. the GEH forms in pdf/
 ```
 
-`demo.py` prints its mode first. It picks one of four:
+`demo.py` prints its mode first:
 
 | Mode | When | What reads the reports |
 |---|---|---|
-| **recorded** | no API key (the default reproduction) | real gpt-4o answers saved in `data/recorded/`, replayed with no API calls. A report with no recording, or one recorded under an older prompt, is flagged "Needs the live model" — never guessed. |
-| **live** | a key is set (environment or `.env`) | the real model, gpt-4o by default (`TRIAGE_MODEL` overrides). Paid API calls. |
-| **record** | `--record` (needs a key) | live, and saves every response to `data/recorded/` for future recorded runs. |
-| **offline** | `--offline` | a regex test double, never the API. Used by CI and the local gate; not the real extractor. |
+| recorded | no API key | real gpt-4o answers saved in `data/recorded/`, replayed with no API calls. A report with no recording, or one recorded under a different prompt, is flagged "Needs the live model", never guessed. |
+| live | a key is set (environment or `.env`) | the model, gpt-4o by default (`TRIAGE_MODEL` overrides). Paid API calls. |
+| record | `--record` (needs a key) | live, and saves each response for future recorded runs. |
+| offline | `--offline` | a regex test double, not the real extractor. |
 
-Recorded answers go through the same validation as live ones. For a live run, set `TRIAGE_API_KEY` (or `OPENAI_API_KEY`), and optionally `TRIAGE_MODEL` and `TRIAGE_BASE_URL` for any OpenAI-compatible endpoint (OpenRouter and LiteLLM proxy work), in the environment or a git-ignored `.env` file.
+Recorded answers go through the same validation as live ones. For a live run set `TRIAGE_API_KEY` (or `OPENAI_API_KEY`), and optionally `TRIAGE_MODEL` and `TRIAGE_BASE_URL` for any OpenAI-compatible endpoint, in the environment or a git-ignored `.env` file.
+
+## Tests
+
+```bash
+pytest -q                                  # unit, example and Hypothesis property tests
+pytest -q && python demo.py --offline      # the full check CI runs
+```
+
+No test calls the API: `tests/conftest.py` blocks the OpenAI client.
+
+## Folders
+
+- `.github/` CI workflow: install, `pytest -q`, `python demo.py --offline`.
+- `app/` placeholder for the coordinator UI (not built).
+- `data/` distance table, recorded model responses, and a placeholder for synthetic reports.
+- `pdf/` sample GEH repair request forms (synthetic).
+- `reports/` the six synthetic reports the demo reads by default.
+- `scripts/` `probe_llm.py`, a manual, paid probe of the live extractor.
+- `tests/` mirrors `triage/`.
+- `triage/` the pipeline stages and their shared models.
 
 ## Adding a report
 
@@ -68,33 +82,38 @@ Message:
 power point in the kitchen is sparking and smells like burning
 ```
 
-- `Source`: `officer` (or `phone`) for a transcribed call, `tenant_direct` (or `web`, `form`, `email`) for a tenant's own report.
+- `Source`: `officer` (or `phone`) for a transcribed call, `tenant_direct` (or `tenant direct`, `web`, `form`, `email`) for a tenant's own report.
 - `Reported`: when the tenant reported the fault, as `2026-09-23 09:15` or `23/09/2026 9:15 am`. With no timezone it is read as NT time (UTC+09:30).
 - `Request ID:` is optional; one is generated if absent.
+- A file with a missing or bad field is skipped and listed, never guessed.
 
 ## GEH repair request forms (PDF)
 
-`python demo.py pdf` runs the pipeline on NT Government Employee Housing request forms (GEHSF03). `triage/geh_form.py` turns **each issue row into its own Report**:
+`triage/geh_form.py` turns each issue row of an NT Government Employee Housing form (GEHSF03) into its own Report:
 
 - `raw_text` = issue + location + comments, in the tenant's words.
-- **Not** in `raw_text`: the tenant's own Immediate/Urgent/Routine choice (tiers come from the published list in Stage 4, and the model never sees priority labels), or their name, phone, email and address.
+- Not in `raw_text`: the tenant's own Immediate/Urgent/Routine choice (tiers come from the published fault list in evaluation, and the model never sees priority labels), or their name, phone, email and address.
 - `tenant_id` is a pseudonymous hash of the email; `community` comes from the address; `region`, `source_file`, `source_item` record provenance.
-- `original_report_timestamp` = the "date previously reported to DIPL" when given (escalation never resets queue fairness), otherwise the time the PDF arrived (file modified time). `timestamp_source` records which.
+- `original_report_timestamp` = the "date previously reported to DIPL" when given, otherwise the file's modified time. `timestamp_source` records which.
 
 ## Guarantees tested
 
-- No unflagged job ever ranks above a flagged one.
-- Equal flag and tally: oldest report first.
-- Changing any logistics value (distance, community, capacity, shared route) never changes any position.
-- Changing every field the model's output can reach (fault text, taxonomy matches, spans, flags, tier/base split at the same tally) never changes any position.
-- `ranking.py` imports only the shared models: no code path from Stage 6 to an LLM.
-- The model's output is rejected if it carries any scoring field (`priority`, `rank`, `tier`, `urgency_tally`, `score`, ...).
-- A `Report` carries only the intake fields; nothing interpretive can be attached at Stage 1.
-- Review-band jobs never enter the sorted queue.
-- The extraction prompt contains no tier, score or rank words and no digits; the response schema has no numeric fields.
-- Every claimed fact needs a quoted span, including each taxonomy match and an `intermittent` impact; unverified spans never reach the SMS or coordinator view.
-- Tenant SMS never shows distance.
+- A job is never ranked above one with a higher safety level (`test_p1_no_job_ranked_above_higher_safety`).
+- Equal safety and tally: the earlier report goes first (`test_p2_equal_safety_and_tally_older_first`).
+- Changing distance never changes the result (`test_p3_distance_never_changes_result`); input order never does either (`test_p4_shuffling_never_changes_result`).
+- A job is in the review band exactly when it has no tier and no safety trigger (`test_p5_band_exactly_when_untiered_and_no_safety`).
+- The model's output is rejected if it carries a scoring field (`test_llm_cannot_add_scoring_fields`), and the response schema has no numeric fields.
+- The extraction prompt contains no tier or scoring words, and extraction imports only `FAULT_NAMES` from `tiers.py`.
+- Every claimed fact needs a quoted span; quotes not found in the report never lower a score.
+- The tenant SMS never shows distance, queue position, `decided_by`, another job's ID, a source or a tier label.
+- A `Report` carries only intake fields.
 
-## Integration notes for Stages 3 to 5
+## Limitations
 
-`demo.py` has clearly marked `_standin_*` functions for Stages 3 to 5. Replace them with the real modules; they only need to return an `EnrichedJob`. Set `urgency_tally=None` for off-list faults to send them to the review band.
+- Logistics (distance, trade capacity, bundling) is not built; `demo.py` shows distance for display only.
+- No real fault-report data exists; every report and form here is synthetic.
+- Recorded mode only covers report texts that have a recording; any other report is flagged for the live model.
+- The offline test double cannot read dialect or informal wording, and never reports an unclear hazard, a sign, a mismatch, harm or worsening.
+- A fault with no schema field, or detail the tenant never gave, is invisible to the system.
+- Faults not on either tier authority (e.g. air conditioning) go to the review band for a coordinator's tier call.
+- Dialect bias in extraction is reduced, not removed.

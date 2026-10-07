@@ -1,8 +1,9 @@
-"""Stage 1: Intake.
+"""Intake: the first stage. Wraps raw text in a Report and stores it.
 
-Wraps raw text in a Report and stamps the four fields everything downstream
-depends on. No interpretation happens here. Persistence sits behind a
-repository interface so ranking never touches SQL.
+Pipeline: intake -> extraction -> verification -> evaluation -> ranking -> explain.
+Input: raw text plus who, where and when. Output: a Report with its request_id and
+original_report_timestamp stamped. No interpretation happens here. Storage sits behind
+ReportRepository, so ranking never touches SQL.
 """
 from __future__ import annotations
 
@@ -16,6 +17,11 @@ from .models import ChildJob, Report, SourceTag
 
 
 def new_request_id() -> str:
+    """A new opaque job ID: "R-" plus 8 hex digits.
+
+    The only ID source (invariant 7). It never encodes region, so the job_id tie-break
+    in ranking can't favour one place over another.
+    """
     return f"R-{uuid.uuid4().hex[:8].upper()}"
 
 
@@ -35,8 +41,8 @@ def create_report(
     """Build a Report.
 
     original_report_timestamp is the time the TENANT reported the fault (for a
-    phone call, when they rang), not when the record was typed in. It is the
-    FIFO input for Stage 6 and is never overwritten after this point.
+    phone call, when they rang), not when the record was typed in. It is ranking's
+    FIFO input and is never overwritten after this point (invariant 6).
     """
     return Report(
         request_id=request_id or new_request_id(),
@@ -53,6 +59,8 @@ def create_report(
 
 
 class ReportRepository(Protocol):
+    """Report storage as the pipeline sees it; SQLiteReportRepository is the one implementation."""
+
     def save(self, report: Report) -> None: ...
     def get(self, request_id: str) -> Optional[Report]: ...
     def append_followup(self, request_id: str, text: str, received_at: datetime) -> Report: ...
@@ -63,11 +71,11 @@ class ReportRepository(Protocol):
 
 
 class DuplicateRequestError(Exception):
-    pass
+    """A report with this request_id is already stored."""
 
 
 class UnknownRequestError(Exception):
-    pass
+    """No stored report has this request_id (matched exactly, never fuzzy)."""
 
 
 class SQLiteReportRepository:
@@ -164,12 +172,15 @@ class SQLiteReportRepository:
         return self._row_to_report(row, self._followups(request_id))
 
     def append_followup(self, request_id: str, text: str, received_at: datetime) -> Report:
-        """Escalation loop entry point.
+        """Append a tenant's follow-up and return the updated report (used by escalation.escalate).
 
         Matched by exact request_id only, never fuzzy. The follow-up text is
-        appended so Stage 2 re-extracts over the whole history, while
+        appended so extraction re-reads the whole history, while
         original_report_timestamp is untouched: escalation never resets
-        queue fairness.
+        queue fairness (invariant 6).
+
+        Raises:
+            UnknownRequestError: no report has this request_id.
         """
         if self.get(request_id) is None:
             raise UnknownRequestError(request_id)
@@ -187,7 +198,11 @@ class SQLiteReportRepository:
         return [self._row_to_report(r, self._followups(r[0])) for r in rows]
 
     def save_child(self, job: ChildJob) -> None:
-        """Insert or update a compound report's child job."""
+        """Insert or update a compound report's child job.
+
+        Raises:
+            UnknownRequestError: the parent report is not stored.
+        """
         if self.get(job.parent_report_id) is None:
             raise UnknownRequestError(job.parent_report_id)
         # Upsert, not INSERT OR REPLACE: a replace re-inserts the row and changes children() order.
@@ -214,4 +229,5 @@ class SQLiteReportRepository:
 
 
 def utc_now() -> datetime:
+    """The current time in UTC, timezone-aware."""
     return datetime.now(timezone.utc)

@@ -1,7 +1,8 @@
-"""Recorded model responses: replay saved real answers without an API key, or record new ones.
+"""Recorded model responses for extraction: replay saved real answers with no API key, or record new ones.
 
-Both clients sit behind extract(), so a recorded response goes through the same _parse and
-validation as a live one; nothing recorded is trusted blindly.
+Input: a report's text (via the user prompt). Output: the raw JSON the model gave for it,
+read from or written to data/recorded/. Both clients sit behind extract(), so a recorded
+answer goes through the same _parse and validation as a live one.
 """
 
 import hashlib
@@ -37,6 +38,7 @@ def prompt_hash(model: str | None = None) -> str:
 
 
 def recording_path(raw_text: str, folder: Path) -> Path:
+    """One file per exact report text, named by its SHA-256."""
     return folder / f"{hashlib.sha256(raw_text.encode('utf-8')).hexdigest()}.json"
 
 
@@ -65,6 +67,11 @@ class RecordedClient:
         self.name = f"recorded:{self.model}"
 
     def complete_json(self, system: str, user: str, schema: dict) -> str:
+        """The recorded answer for this report text.
+
+        Raises:
+            RecordingMissing: no file, an unreadable file, or one from another prompt_hash.
+        """
         path = recording_path(report_text_from_prompt(user), self.folder)
         if not path.exists():
             raise RecordingMissing(MISS)
@@ -87,6 +94,7 @@ class RecordingClient:
         self.name = f"recording:{live.name}"
 
     def complete_json(self, system: str, user: str, schema: dict) -> str:
+        """Call the live client, save its raw answer, and return it unchanged."""
         raw = self.live.complete_json(system, user, schema)
         self.folder.mkdir(parents=True, exist_ok=True)
         record = {"model": self.model, "recorded_at": date.today().isoformat(),

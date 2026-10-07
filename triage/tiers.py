@@ -1,7 +1,8 @@
-"""Fault tier table: a fault's tier is looked up here, never inferred (master §4.4).
+"""The fault tier table: a fault's tier is looked up here, never inferred (master §4.4, §4.8).
 
+Used by evaluation (tiers and sources) and extraction (FAULT_NAMES only, never tiers).
 Two authorities:
-- nt.gov.au repairs guidance: "dangerous things are repaired first" (master §4.8).
+- nt.gov.au repairs guidance: "dangerous things are repaired first".
 - NT Residential Tenancies Act 1999 s63(2) emergency repairs, as in force 1 Aug 2025.
 """
 
@@ -11,11 +12,13 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 # s63(2)(e), (k), (m) and (n) are excluded: "dangerous", "unsafe", "likely to injure" and
-# "serious" are judgments, not lookups (Part 0). "Serious" is dropped from roof leak and
-# storm damage for the same reason; the accepted cost is a false-high on minor cases.
+# "serious" are judgments, not lookups (Part 0, master E2). "Serious" is dropped from roof
+# leak and storm damage for the same reason; the accepted cost is a false-high on minor cases.
 
 
 class FaultEntry(BaseModel):
+    """One tier-table row: fault name, tier, whether it is degraded by definition, sources."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str

@@ -10,6 +10,4 @@ __pycache__/
 *.db
 .env
 .DS_Store
-result.txt
-.env
 scratch/

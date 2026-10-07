@@ -1,5 +1,11 @@
+"""Ranking: a pure, deterministic sort of jobs into a queue plus a review band.
+
+Pipeline: intake -> extraction -> verification -> evaluation -> ranking -> explain.
+Input: RankInput per job (from adapter.to_rank_input). Output: RankResult, with a
+decided_by reason per position for the coordinator's why-trace. No model, no I/O.
+"""
+
 from datetime import datetime
-from uuid import UUID
 
 from triage.models import RankedJob, RankInput, RankResult
 
@@ -18,25 +24,37 @@ UNTIERED_TIE_REASON = "both untiered at the same safety level; earlier report wi
 
 
 def _in_review_band(job: RankInput) -> bool:
+    # Master §4.4: no tier and no safety trigger waits for a tier call instead of being ranked.
     return job.tally is None and job.safety_level == 0
 
 
-def sort_key(job: RankInput) -> tuple[int, int, int, datetime, UUID]:
-    # 5.3: no tier and no safety trigger goes to the review band, so reaching here is a bug.
+def sort_key(job: RankInput) -> tuple[int, int, int, datetime, str]:
+    """The sort key for one ranked job (invariant 5); lower sorts first.
+
+    Raises:
+        ValueError: the job belongs in the review band, so it must never be sorted.
+    """
     if _in_review_band(job):
         raise ValueError(f"job {job.job_id} has no tier and no safety trigger; belongs in review band")
-    # Invariant 3: distance is never read here (Logistics G1, equity).
+    # Invariant 5, Logistics G1: distance, logistics and overrides are never read here, so a
+    # remote job can't sink for being far from town.
     # sorted() is ascending, so values are negated where higher must come first.
     return (
-        -job.safety_level,  # Safety G3
-        0 if job.tally is None else 1,  # untiered safety job first in its level (invariant 6)
+        -job.safety_level,  # Safety G3: safety sits above urgency and can't be outweighed
+        # A safety job with no tier (e.g. roof collapse) must never sink for lack of a tier call.
+        0 if job.tally is None else 1,
         -(job.tally or 0),  # Urgency G1/G2
-        job.original_timestamp,  # FIFO
-        job.job_id,  # deterministic; neutral only because IDs never encode region
+        job.original_timestamp,  # FIFO on when the tenant reported it, never re-stamped (invariant 6)
+        job.job_id,  # deterministic; neutral only because IDs never encode region (invariant 7)
     )
 
 
 def rank(jobs: list[RankInput]) -> RankResult:
+    """Split jobs into the review band (oldest first) and the ranked queue.
+
+    Raises:
+        ValueError: a job fails validation or two jobs share a job_id.
+    """
     # model_copy(update=...) skips validation, so re-check every job. vars() is used, not
     # model_dump(), because model_dump() silently drops unknown fields such as "override".
     # Pydantic's ValidationError is a ValueError subclass.
@@ -56,11 +74,10 @@ def rank(jobs: list[RankInput]) -> RankResult:
         RankedJob(
             position=position,
             job_id=job.job_id,
-            # Invariant 6: a safety job without a tier is ranked, but flagged for a tier call.
+            # A safety job without a tier is ranked, but flagged for a tier call (invariant 5).
             flags=(NO_TIER_FLAG,) if job.tally is None else (),
             decided_by=_decided_by(position, ordered[position - 2] if position > 1 else None, job),
         )
-        # enumerate(..., start=1) yields 1-based positions.
         for position, job in enumerate(ordered, start=1)
     )
     return RankResult(review_band=tuple(job.job_id for job in band_sorted), ranked=ranked)

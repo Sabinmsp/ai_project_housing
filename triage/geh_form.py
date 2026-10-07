@@ -1,7 +1,9 @@
-"""Stage 1 input: NT Government Employee Housing repair request form (GEHSF03).
+"""Intake input: NT Government Employee Housing repair request form (GEHSF03).
 
+Input: one form PDF. Output: one Report per issue row, for intake to store.
 One PDF holds one property and a table of issues. Each issue becomes its own
-Report, because each is its own job. Page 3 holds the filled-in values:
+Report, because each is its own job. The first page carrying the form title
+holds the filled-in values (page 3 of GEHSF03):
 
   * the header (region, address, tenant) is read from pypdf's layout text,
     where each value sits beside its printed label;
@@ -11,7 +13,7 @@ Report, because each is its own job. Page 3 holds the filled-in values:
 
 What goes into Report.raw_text: the issue, location and comments, in the
 tenant's words. What does NOT: the tenant's own Immediate/Urgent/Routine
-choice (tiers come from the published fault list in Stage 4, and the model
+choice (tiers come from the published fault list in evaluation, and the model
 must never see priority labels), and the tenant's name, phone, email and
 address (the model has no need for them).
 
@@ -43,11 +45,13 @@ _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
 
 
 class FormParseError(ValueError):
-    pass
+    """The PDF is not a GEH form, or a required part of it is missing or malformed."""
 
 
 @dataclass(frozen=True)
 class FormItem:
+    """One row of the form's issues table, before it becomes a Report."""
+
     number: int
     issue: str
     location: str
@@ -57,6 +61,7 @@ class FormItem:
 
 
 def is_geh_form(text: str) -> bool:
+    """True if the text contains the GEH form's title."""
     return FORM_MARKER in text
 
 
@@ -65,7 +70,11 @@ def _nil(value: str) -> Optional[str]:
 
 
 def parse_items(lines: list[str]) -> list[FormItem]:
-    """Parse the issues table: one filled cell per line, rows numbered 1, 2, 3..."""
+    """Parse the issues table: one filled cell per line, rows numbered 1, 2, 3...
+
+    Raises:
+        FormParseError: a row is out of order or incomplete, or no row is filled in.
+    """
     lines = [l.strip() for l in lines if l.strip()]
     items: list[FormItem] = []
     i, n = 0, 1
@@ -129,6 +138,7 @@ def tenant_id_for(email: str) -> str:
 
 
 def raw_text_for(item: FormItem) -> str:
+    """Issue, location and comments only: the tenant's own words, no priority or personal details."""
     parts = [item.issue, f"Location: {item.location}"]
     if item.comments:
         parts.append(f"Comments: {item.comments}")
@@ -136,6 +146,11 @@ def raw_text_for(item: FormItem) -> str:
 
 
 def parse_geh_form(path: Path) -> list[Report]:
+    """One Report per issue on the form at path.
+
+    Raises:
+        FormParseError: not a GEH form, a header field is missing, or an item is invalid.
+    """
     from pypdf import PdfReader
 
     pages = PdfReader(path).pages
