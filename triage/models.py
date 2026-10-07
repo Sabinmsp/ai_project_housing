@@ -273,6 +273,31 @@ class VerifiedSpan(BaseModel):
     verified: bool
 
 
+class SecondReading(BaseModel):
+    """What the second reader (Jev) said about one job: coordinator flags only, never a score."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status: Literal["ran", "not run (no key)", "not run (offline)", "not run (recorded mode)", "unavailable"]
+    # No default: "ran" with no flags means agreement, so the flags must always be stated.
+    flags: tuple[Reason, ...]
+    detail: Optional[str]  # the redacted error when unavailable
+
+
+HazardReading = Literal["none", "unclear", "conditional", "active"]
+
+
+class ReRead(BaseModel):
+    """Both extraction readings of one fault's hazard after a second-reader flag."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    read_1: HazardReading
+    # None: the re-read failed validation, or found no fault matching this one's taxonomy.
+    read_2: Optional[HazardReading]
+    used: Literal["read 1", "read 2"]
+
+
 class EnrichedJob(BaseModel):
     """One job after verification, evaluation and logistics: what ranking and explain read.
 
@@ -313,6 +338,11 @@ class EnrichedJob(BaseModel):
     # Straight-line km to nearest_office, rounded to 5; both None when the community is unknown.
     distance_cost_km: Optional[float] = None
     nearest_office: Optional[str] = None
+    # Coordinator display only, never read by ranking or tenant text. None: no second-reader
+    # step ran for this job (e.g. built outside the demo pipeline).
+    second_reader: Optional[SecondReading] = None
+    # Coordinator display only. None: no re-read was triggered for this job.
+    reread: Optional[ReRead] = None
     capacity_block_flag: bool = False
     next_actionable: Optional[str] = None
     shared_route_opportunities: list[str] = Field(default_factory=list)

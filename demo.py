@@ -28,11 +28,12 @@ from triage.explain import (
 )
 from triage.extraction import LLMClient, OfflineExtractor, OpenAICompatibleClient, extract
 from triage.intake import DuplicateRequestError, SQLiteReportRepository, new_request_id
-from triage.models import (ChildJob, EnrichedJob, ExtractedFacts, ExtractionStatus, Report, ReportExtraction,
+from triage.models import (ChildJob, EnrichedJob, ExtractedFacts, ExtractionStatus, Report, ReRead, ReportExtraction,
                            VerifiedSpan)
 from triage.ranking import rank
 from triage.recording import RECORDED_DIR, RecordedClient, RecordingClient
 from triage.report_files import load_reports
+from triage import reread, second_reader
 from triage.verification import claim_spans, verify_spans
 
 REPORTS_DIR = Path(__file__).with_name("reports")
@@ -174,6 +175,13 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(f"Report folder not found: {folder}")
     repo = SQLiteReportRepository()
     client = _choose_client(args.offline, args.record)
+    # Second reader (Jev): never under --offline; recorded mode makes no paid calls either.
+    recorded = client.name.startswith("recorded:")
+    jev = None if args.offline or recorded else second_reader.client_from_env()
+    jev_not_run = second_reader.not_run(
+        "not run (offline)" if args.offline else "not run (recorded mode)" if recorded else "not run (no key)"
+    )
+    print(f"SECOND READER: {'Jev ' + second_reader.JEV_MODEL + ' (paid API calls)' if jev else jev_not_run.status}")
 
     # ---- intake --------------------------------------------------------------
     reports, skipped = load_reports(folder)
@@ -236,7 +244,28 @@ def main(argv: list[str] | None = None) -> None:
     # ---- verification, evaluation, logistics stand-in -------------------------
     jobs = []
     for report, extraction in extracted:
-        report_jobs = _build_jobs(report, extraction)
+        compound = len(extraction.faults) > 1
+        # Per fault; a compound report's fault is named so Jev answers about that one only.
+        readings = [
+            second_reader.read(jev, second_reader.state_for(report.raw_text, f.fault_description, compound), f)
+            if jev else jev_not_run
+            for f in extraction.faults
+        ]
+        # Re-read safety net: a hazard or mechanism flag (live mode only) triggers one more
+        # extraction of the whole report; only the flagged faults use it, and only to raise safety.
+        records: list[tuple[ReRead, tuple[str, ...]] | None] = [None] * len(readings)
+        triggered = [i for i, r in enumerate(readings) if reread.should_reread(client.name, r)]
+        if triggered:
+            again = extract(report, client)
+            faults = list(extraction.faults)
+            for i in triggered:
+                faults[i], record, flags = reread.combine(faults[i], again)
+                records[i] = (record, flags)
+            extraction = ReportExtraction(faults=tuple(faults))
+        report_jobs = []
+        for job, r, rec in zip(_build_jobs(report, extraction), readings, records):
+            job = second_reader.attach(job, r)
+            report_jobs.append(job if rec is None else reread.attach(job, *rec))
         _save_children(repo, extraction, report_jobs)
         jobs.extend(report_jobs)
     _heading("VERIFICATION + EVALUATION (code)   distance: straight-line to nearest housing office")

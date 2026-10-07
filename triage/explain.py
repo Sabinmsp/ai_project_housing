@@ -22,6 +22,8 @@ from triage.models import (
     RankedJob,
     RankResult,
     Reason,
+    ReRead,
+    SecondReading,
     VerifiedSpan,
 )
 from triage.ranking import REVIEW_BAND_REASON
@@ -53,6 +55,9 @@ class ReasoningTrace(BaseModel):
     decided_by: str
     distance_km: float | None
     nearest_office: str | None
+    # Coordinator-only: tenant renderers never read it.
+    second_reader: SecondReading | None
+    reread: ReRead | None
     logistics_notes: tuple[str, ...]
     # Coordinator-only: the tenant sent WHY <ref> for this job.
     tenant_asked_why: bool
@@ -103,6 +108,8 @@ def build_trace(entry: RankedJob, job: EnrichedJob, queue_length: int, asked_why
         decided_by=entry.decided_by,
         distance_km=job.distance_cost_km,
         nearest_office=job.nearest_office,
+        second_reader=job.second_reader,
+        reread=job.reread,
         logistics_notes=_logistics_notes(job),
         tenant_asked_why=asked_why,
     )
@@ -349,9 +356,31 @@ def render_coordinator(trace: ReasoningTrace) -> str:
         ("decided_by", trace.decided_by, ""),
         *([("tenant_contact", "tenant asked why", "")] if trace.tenant_asked_why else []),
         _distance_row(trace.distance_km, trace.nearest_office),
+        *_second_reader_rows(trace.second_reader),
+        *_reread_rows(trace.reread),
     ]
     rows += [("logistics", n, "display only") for n in trace.logistics_notes]
     return _table(rows)
+
+
+def _second_reader_rows(reading: SecondReading | None) -> list[tuple[str, str, str]]:
+    # Flags only: shown to the coordinator, never fed back into safety, tally or rank.
+    if reading is None:
+        return []
+    if reading.status == "ran":
+        lines = reading.flags or ("agrees",)
+    elif reading.status == "unavailable":
+        lines = (f"unavailable ({reading.detail})",)
+    else:
+        lines = (reading.status,)
+    return [("second_reader", line, "flag only") for line in lines]
+
+
+def _reread_rows(record: ReRead | None) -> list[tuple[str, str, str]]:
+    if record is None:
+        return []
+    second = record.read_2 or "unavailable"
+    return [("re_read", f"read 1: {record.read_1}; read 2: {second}; used: {record.used}", "safer reading kept")]
 
 
 def _distance_row(km: float | None, office: str | None) -> tuple[str, str, str]:
@@ -373,6 +402,8 @@ def render_review_entry(job: EnrichedJob, asked_why: bool = False) -> str:
             ("fault", _verified_fault_text(job) or "(no verified fault text)", ""),
             ("community", job.community, ""),
             _distance_row(job.distance_cost_km, job.nearest_office),
+            *_second_reader_rows(job.second_reader),
+            *_reread_rows(job.reread),
             ("original_timestamp", job.original_report_timestamp.isoformat(), "FIFO input, never overwritten"),
             ("review_band", REVIEW_BAND_REASON, ""),
         ]

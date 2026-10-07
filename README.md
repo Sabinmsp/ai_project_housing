@@ -67,7 +67,7 @@ No test calls the API: `tests/conftest.py` blocks the OpenAI client.
   - `housing_offices.json`: NT regional housing offices and their coordinates.
 - `pdf/` sample GEH repair request forms (synthetic).
 - `reports/` the six synthetic reports the demo reads by default.
-- `scripts/` `probe_llm.py`, a manual, paid probe of the live extractor.
+- `scripts/` `probe_llm.py` and `probe_jev.py`, manual, paid probes of the live extractor and the second reader.
 - `tests/` mirrors `triage/`.
 - `triage/` the pipeline stages and their shared models.
 
@@ -109,6 +109,30 @@ power point in the kitchen is sparking and smells like burning
 - Every claimed fact needs a quoted span; quotes not found in the report never lower a score.
 - The tenant SMS never shows distance, queue position, `decided_by`, another job's ID, a source or a tier label.
 - A `Report` carries only intake fields.
+
+## Second reader (Jev)
+
+Jev (TypeSafe AI, https://docs.typesafe.ai/api) reads each report independently and answers
+four multiple-choice questions per fault: hazard (described / unclear / none), mechanism (happening
+now / could happen / no hazard), alternative (yes / no) and fault or sensed cue only. For a compound
+report it is asked once per fault, with that fault's words named. It sees the report text only —
+never tiers, points, scoring rules or other jobs.
+
+- **Flags only.** Where Jev's answer differs from the extraction model's, or its confidence is
+  below 0.7, the coordinator view shows "disagrees on <field> — check" or "low confidence on
+  <field> — check". It never changes a job's safety level, tally, tier or rank (property-tested).
+- **0.7 is an assumption.** `LOW_CONFIDENCE` is uncalibrated: it has not been measured against
+  labelled reports.
+- **Never blocks a job.** No `TYPESAFE_API_KEY` → "not run (no key)"; an API error or a 30 s
+  timeout → "unavailable" (key redacted), and the job is still ranked. `--offline` never calls it
+  ("not run (offline)"); recorded mode makes no paid calls ("not run (recorded mode)").
+- **Re-read safety net (live mode only).** A hazard or mechanism flag triggers one more
+  extraction of the same report. Per fault (matched by taxonomy), the higher hazard reading is
+  used (active > conditional > unclear > none); everything else stays from the first read. It can
+  only raise safety. Differing readings are flagged "Readings inconsistent … Check."; a failed
+  re-read keeps the first and is flagged "Re-read unavailable". Jev only triggers it; no value
+  comes from Jev.
+- Tenant SMS and WHY never mention it.
 
 ## Data sources
 
