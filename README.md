@@ -1,166 +1,204 @@
 # Housing maintenance triage
 
-Ranks repair reports from remote Northern Territory housing so that safety comes first, then urgency, then first-reported.
-A model reads each report for facts and quotes the tenant's words; plain code applies every rule, so the model never sets a tier, score or position.
+Reads free-text repair reports from NT public housing tenants and ranks them: safety first, then
+urgency, then earliest report. Every position comes with an explanation. Distance to the nearest
+housing office is shown to the coordinator but never used to rank.
 
 ## Pipeline
 
 ```
-reports/*.pdf|.txt
-   │  report_files.load_reports()   (GEH forms: geh_form.parse_geh_form, one Report per issue)
-   ▼
-intake          intake.create_report()  ──► Report {request_id, tenant_id, raw_text, source_tag,
-   │            repo.save()                       community, original_report_timestamp}
-   ▼
-extraction      extraction.extract()  ──► report text + fault names ──► model (structured output)
-   │            ◄── ReportExtraction {faults: ExtractedFacts[]}, validated; retry once, then flag
-   ▼
-verification    verification.verify_spans()  ──► quotes not found in the report text
-   ▼
-evaluation      evaluation.evaluate()  ──► tier, urgency tally, safety level, flags with reasons
-   ▼            (logistics not built: demo.py adds distance for display only)
-ranking         adapter.to_rank_input() ──► ranking.rank() ──► RankResult {review_band, ranked}
-   ▼            sort_key = (-safety_level, tally-less first, -tally, original_timestamp, job_id)
-explain         explain.build_traces() ──► render_coordinator(), render_tenant_sms(),
-                render_review_entry()
-
-escalation      escalation.escalate(): follow-up appended by exact ID ──► re-enters extraction;
-                original_report_timestamp is never changed
+intake ─► extraction (gpt-4o) ─► second reader (Jev, flag only) ─► re-read safety net
+       ─► span verification ─► evaluation (tier table) ─► ranking
+       ─► explanation (coordinator trace, tenant SMS, WHY answer)
 ```
 
-## Run
+| Stage | Code | What it does |
+|---|---|---|
+| intake | `triage/intake.py`, `triage/report_files.py`, `triage/geh_form.py` | Reads report files, stamps an opaque id (`R-` + 8 hex) and the original report time. |
+| extraction | `triage/extraction.py` | The model returns facts with quoted spans, per fault. It never returns a tier, score or position. |
+| second reader | `triage/second_reader.py` | Jev (TypeSafe AI) answers four questions independently. Disagreement or confidence < 0.7 is a coordinator flag only. |
+| re-read | `triage/reread.py` | After a hazard/mechanism flag (live mode only), one more extraction; the higher hazard reading is used. |
+| verification | `triage/verification.py` | Checks every quote is in the tenant's text. |
+| evaluation | `triage/evaluation.py`, `triage/tiers.py` | Tier from the tier table, urgency tally, safety level, reasoned flags. |
+| ranking | `triage/adapter.py`, `triage/ranking.py` | `sort_key = (-safety_level, tally-less first, -tally, original_timestamp, job_id)`; jobs with no tier and no safety trigger go to the review band. |
+| explanation | `triage/explain.py` | Coordinator trace, tenant SMS, answer to `WHY <ref>`. |
+
+## Quick start
 
 ```bash
 pip install -r requirements.txt
-python demo.py              # recorded mode when no API key is set
-python demo.py --offline    # regex test double, never calls the API (what CI runs)
-python demo.py --record     # live, and saves every response to data/recorded/
-python demo.py pdf          # any folder of reports, e.g. the GEH forms in pdf/
 ```
 
-`demo.py` prints its mode first:
+Optional `.env` in the repo root (git-ignored):
 
-| Mode | When | What reads the reports |
-|---|---|---|
-| recorded | no API key | real gpt-4o answers saved in `data/recorded/`, replayed with no API calls. A report with no recording, or one recorded under a different prompt, is flagged "Needs the live model", never guessed. |
-| live | a key is set (environment or `.env`) | the model, gpt-4o by default (`TRIAGE_MODEL` overrides). Paid API calls. |
-| record | `--record` (needs a key) | live, and saves each response for future recorded runs. |
-| offline | `--offline` | a regex test double, not the real extractor. |
+```
+OPENAI_API_KEY=sk-...        # live extraction (TRIAGE_API_KEY also works)
+TYPESAFE_API_KEY=...         # optional: second reader (Jev)
+```
 
-Recorded answers go through the same validation as live ones. For a live run set `TRIAGE_API_KEY` (or `OPENAI_API_KEY`), and optionally `TRIAGE_MODEL` and `TRIAGE_BASE_URL` for any OpenAI-compatible endpoint, in the environment or a git-ignored `.env` file.
-
-## Tests
+Run modes (`demo.py` prints its mode first):
 
 ```bash
-pytest -q                                  # unit, example and Hypothesis property tests
-pytest -q && python demo.py --offline      # the full check CI runs
+python demo.py               # live if a key is set; otherwise recorded
+python demo.py --offline     # regex test double, never calls any API (what CI runs)
+python demo.py --record      # live, and saves every response to data/recorded/ (needs a key)
+python demo.py pdf           # any folder of reports, e.g. the GEH forms in pdf/
 ```
 
-No test calls the API: `tests/conftest.py` blocks the OpenAI client.
+| Mode | When | Reads reports with | Second reader |
+|---|---|---|---|
+| live | `OPENAI_API_KEY` or `TRIAGE_API_KEY` set | gpt-4o (paid calls; `TRIAGE_MODEL` / `TRIAGE_BASE_URL` override) | Jev if `TYPESAFE_API_KEY` set, else "not run (no key)" |
+| recorded | no key | real gpt-4o answers saved in `data/recorded/` for the 6 demo reports; a report with no recording is flagged for a human, never guessed | "not run (recorded mode)" |
+| record | `--record` | live, saving each response | Jev if keyed; no re-read (it would overwrite the recording) |
+| offline | `--offline` | a regex test double, not the real extractor (CI only) | "not run (offline)" |
 
-## Folders
+To run recorded mode with a key in `.env`, blank the key for that run:
+`OPENAI_API_KEY= TRIAGE_API_KEY= python demo.py`.
 
-- `.github/` CI workflow: install, `pytest -q`, `python demo.py --offline`.
-- `app/` placeholder for the coordinator UI (not built).
-- `data/` distance table, recorded model responses, and a placeholder for synthetic reports.
-  - `communities.json`: NT community coordinates and confirmed aliases (see "Data sources").
-  - `housing_offices.json`: NT regional housing offices and their coordinates.
-- `pdf/` sample GEH repair request forms (synthetic).
-- `reports/` the six synthetic reports the demo reads by default.
-- `scripts/` `probe_llm.py` and `probe_jev.py`, manual, paid probes of the live extractor and the second reader.
-- `tests/` mirrors `triage/`.
-- `triage/` the pipeline stages and their shared models.
+Other commands:
 
-## Adding a report
+```bash
+python demo.py reports --offline --why R-0000ABCD   # print the tenant's WHY answer for that ref
+python scripts/probe_llm.py                         # paid: 7 fixed samples through the live extractor
+python scripts/probe_jev.py                         # paid: the same 7 samples through Jev; exits 1 without TYPESAFE_API_KEY
+```
 
-Drop a `.pdf` or `.txt` file into `reports/`, one report per file, in this layout:
+`--why` matches the ref exactly. Refs are generated fresh on every run unless the report file
+has a `Request ID:` line, so `--why` only finds a ref from an earlier run for such files.
+An unknown ref prints: "We couldn't find that reference. Please check the number or call the
+maintenance call centre on 1800 104 076." The coordinator view then marks the job "tenant asked why".
+
+## Input format
+
+Reports are files in a folder (`reports/` by default), one report per file: `.pdf` or `.txt`
+with this layout.
 
 ```
 Tenant ID: T-07
 Community: Galiwinku
-Source: officer
+Source: tenant_direct
 Reported: 2026-09-23 09:15
+Request ID: R-0000ABCD
 Message:
-power point in the kitchen is sparking and smells like burning
+toilet blocked
 ```
 
-- `Source`: `officer` (or `phone`) for a transcribed call, `tenant_direct` (or `tenant direct`, `web`, `form`, `email`) for a tenant's own report.
-- `Reported`: when the tenant reported the fault, as `2026-09-23 09:15` or `23/09/2026 9:15 am`. With no timezone it is read as NT time (UTC+09:30).
-- `Request ID:` is optional; one is generated if absent.
-- A file with a missing or bad field is skipped and listed, never guessed.
+- `Source`: `officer` or `phone` (transcribed call); `tenant_direct`, `tenant direct`, `web`, `form` or `email` (tenant's own words).
+- `Reported`: when the tenant reported it, as `2026-09-23 09:15` (ISO) or `23/09/2026 9:15 am`. No timezone means NT time (UTC+09:30).
+- `Request ID:` is optional.
+- A file with a missing or unreadable field is skipped and listed, never guessed.
+- NT Government Employee Housing repair forms (GEHSF03 PDFs, see `pdf/`) are also read: one report per issue row.
 
-## GEH repair request forms (PDF)
+**Not supported:** typing a report on the command line, and CSV input.
 
-`triage/geh_form.py` turns each issue row of an NT Government Employee Housing form (GEHSF03) into its own Report:
+## What the coordinator sees
 
-- `raw_text` = issue + location + comments, in the tenant's words.
-- Not in `raw_text`: the tenant's own Immediate/Urgent/Routine choice (tiers come from the published fault list in evaluation, and the model never sees priority labels), or their name, phone, email and address.
-- `tenant_id` is a pseudonymous hash of the email; `community` comes from the address; `region`, `source_file`, `source_item` record provenance.
-- `original_report_timestamp` = the "date previously reported to DIPL" when given, otherwise the file's modified time. `timestamp_source` records which.
+Excerpt from `OPENAI_API_KEY= TRIAGE_API_KEY= python demo.py` (recorded mode, `reports/T-03_maningrida.pdf`):
 
-## Guarantees tested
+```
+#1
+job_id                  R-9FA600EC
+taxonomy_match          roof leak  (reference list name)
+tier                    dangerous  (NT Residential Tenancies Act s63(2)(c) — emergency repair)
+base_points             3  (from tier, not text)
+severity_bump           +1
+tally_reason            No alternative named — no-redundancy default: +1
+urgency_tally           4  (3 + 1)
+safety_level            2  (Active hazard described: 'water coming through the light fitting' — full override)
+span:fault_description  "roof leaking in kids room, water coming through the light fitting"  verified
+span:taxonomy_match     "roof leaking in kids room, water coming through the light fitting"  verified
+span:hazard             "water coming through the light fitting"  verified
+original_timestamp      2026-09-29T15:00:00+09:30  FIFO input, never overwritten
+position                1 of 5
+decided_by              top of list
+distance                ~280 km to nearest NT Housing office (Nhulunbuy office) — straight-line; actual dispatch point not known  not in sort_key
+second_reader           not run (recorded mode)  flag only
+```
 
-- A job is never ranked above one with a higher safety level (`test_p1_no_job_ranked_above_higher_safety`).
-- Equal safety and tally: the earlier report goes first (`test_p2_equal_safety_and_tally_older_first`).
-- Changing distance never changes the result (`test_p3_distance_never_changes_result`); input order never does either (`test_p4_shuffling_never_changes_result`).
-- A job is in the review band exactly when it has no tier and no safety trigger (`test_p5_band_exactly_when_untiered_and_no_safety`).
-- The model's output is rejected if it carries a scoring field (`test_llm_cannot_add_scoring_fields`), and the response schema has no numeric fields.
-- The extraction prompt contains no tier or scoring words, and extraction imports only `FAULT_NAMES` from `tiers.py`.
-- Every claimed fact needs a quoted span; quotes not found in the report never lower a score.
-- The tenant SMS never shows distance, queue position, `decided_by`, another job's ID, a source or a tier label.
-- A `Report` carries only intake fields.
+Ids differ on every run. In live mode with Jev, `second_reader` reads `agrees`, or e.g.
+`disagrees on hazard — check (extraction: none; second reader: unclear, confidence 0.48)`; a
+re-read adds `re_read  read 1: none; read 2: active; used: read 2  safer reading kept`.
 
-## Second reader (Jev)
+## What the tenant sees
 
-Jev (TypeSafe AI, https://docs.typesafe.ai/api) reads each report independently and answers
-four multiple-choice questions per fault: hazard (described / unclear / none), mechanism (happening
-now / could happen / no hazard), alternative (yes / no) and fault or sensed cue only. For a compound
-report it is asked once per fault, with that fault's words named. It sees the report text only —
-never tiers, points, scoring rules or other jobs.
+Initial SMS (`--offline` run of the example report above):
 
-- **Flags only.** Where Jev's answer differs from the extraction model's, or its confidence is
-  below 0.7, the coordinator view shows "disagrees on <field> — check" or "low confidence on
-  <field> — check". It never changes a job's safety level, tally, tier or rank (property-tested).
-- **0.7 is an assumption.** `LOW_CONFIDENCE` is uncalibrated: it has not been measured against
-  labelled reports.
-- **Never blocks a job.** No `TYPESAFE_API_KEY` → "not run (no key)"; an API error or a 30 s
-  timeout → "unavailable" (key redacted), and the job is still ranked. `--offline` never calls it
-  ("not run (offline)"); recorded mode makes no paid calls ("not run (recorded mode)").
-- **Re-read safety net (live mode only).** A hazard or mechanism flag triggers one more
-  extraction of the same report. Per fault (matched by taxonomy), the higher hazard reading is
-  used (active > conditional > unclear > none); everything else stays from the first read. It can
-  only raise safety. Differing readings are flagged "Readings inconsistent … Check."; a failed
-  re-read keeps the first and is flagged "Re-read unavailable". Jev only triggers it; no value
-  comes from Jev.
-- Tenant SMS and WHY never mention it.
+> Housing repair R-0000ABCD: we have your report about "toilet blocked". It's being treated as an urgent repair under NT rules. We'll keep you updated. Reply HELP with R-0000ABCD if anything changes or gets worse.
+
+Reply to `WHY R-0000ABCD`:
+
+> Your "toilet blocked" repair (R-0000ABCD) is booked as an urgent repair. Yours was received on 23 September 2026. We know this is hard to live with. A coordinator can see how long it has been waiting. If anyone in the house is unwell, elderly or very young, or this is affecting anyone's health or safety, reply HELP R-0000ABCD and a coordinator will look at it again.
+
+Gas report ("I can smell gas in the kitchen"): the fixed safety advice comes first.
+
+> If you smell gas: leave the building or area and call Fire and Emergency Services on 000. If it is safe to do so, turn off the gas at the cylinder or meter. Do not enter the gas affected area. Housing repair R-0000GA5: we have your report about "smell gas". It is marked as a safety job and is being handled as a priority. We'll keep you updated. Reply HELP with R-0000GA5 if anything changes or gets worse.
+
+All tenant text is fixed templates; no model writes it. A compound report also gets one message
+listing each repair and its ref.
+
+## Design guarantees (each enforced by a test)
+
+| Guarantee | Test |
+|---|---|
+| Distance never changes the ranking | `tests/test_ranking_properties.py::test_p3_distance_never_changes_result` |
+| FIFO uses the original report time, kept through escalation | `test_ranking_properties.py::test_p2_equal_safety_and_tally_older_first`, `test_intake.py::test_escalation_preserves_original_timestamp_and_appends_text`, `test_ranking.py::test_escalated_job_keeps_its_place_by_original_timestamp` |
+| Safety above urgency | `test_ranking_properties.py::test_p1_no_job_ranked_above_higher_safety` |
+| Jev never changes a value (safety, tally, tier, rank) | `test_second_reader.py::test_second_reader_never_changes_safety_tally_or_rank` |
+| The re-read can only raise safety | `test_reread.py::test_reread_never_lowers_safety_and_never_changes_the_tally` |
+| Tenant text never mentions other jobs, ranking or timeframes | `test_explain.py::test_same_own_facts_different_queue_give_identical_sms`, `test_same_own_facts_different_queue_give_identical_why`, `test_other_job_id_reaches_coordinator_never_tenant`, `test_no_tenant_text_explains_ranking_or_states_a_timeframe` |
+| Quotes must be the tenant's own words | `test_verification.py::test_fabricated_quote_on_claimed_field_is_unverified`, `test_near_match_is_not_the_tenants_words`; `test_extraction.py::test_claim_without_span_rejected`; `test_explain.py::test_fault_text_is_the_verified_span_never_model_wording` |
 
 ## Data sources
 
-- **Housing offices:** the office list and addresses come from nt.gov.au, "Contact your local
-  housing office"
-  (https://nt.gov.au/property/social-housing/contacts-and-support-services/contact-your-local-housing-office).
-  Each office's coordinates are its town's, from the `source_url` on its row in
-  `data/housing_offices.json` (Wikipedia town pages).
-- **Communities:** coordinates from the `source_url` on each row of `data/communities.json`
-  (Wikipedia, or Wikidata where no Wikipedia coordinates were used). Aliases are only names that
-  row's own source page confirms: Wadeye (Port Keats), Gunbalanya (Oenpelli), Wurrumiyanga (Nguiu),
-  Hermannsburg (Ntaria) (Hermannsburg, Ntaria), Galiwinku (Galiwin'ku, Elcho Island).
-- **Distance:** haversine great-circle km from the community to the nearest office, rounded to 5 km.
-  Coordinator view only; never read by ranking.
+- **Tier table** (`triage/tiers.py`):
+  - NT Residential Tenancies Act 1999, s63(2) emergency repairs: https://legislation.nt.gov.au/Legislation/RESIDENTIAL-TENANCIES-ACT-1999
+  - nt.gov.au, "Repairs and maintenance of your public housing home" (dangerous things are repaired first): https://nt.gov.au/property/social-housing/looking-after-your-home/repairs-and-maintenance-of-your-home
+- **Housing offices** (`data/housing_offices.json`): nt.gov.au, "Contact your local housing office": https://nt.gov.au/property/social-housing/contacts-and-support-services/contact-your-local-housing-office. Coordinates are town-level, from the `source_url` on each row (Wikipedia).
+- **Communities** (`data/communities.json`): coordinates from the `source_url` on each row (Wikipedia or Wikidata). Aliases only where that row's source page confirms them.
+- **Gas advice** (tenant SMS): NT WorkSafe, gas safety: https://worksafe.nt.gov.au/safety-and-prevention/gas-safety
+- **Electrical advice** (tenant SMS): Power and Water, safety and emergencies: https://www.powerwater.com.au/customers/safety-and-emergencies
+- **Call-centre number** (unknown-ref reply): NT Housing fact sheet FS17: https://dhlgcd.nt.gov.au/media/documents/fact-sheets/repairs-and-maintenance-fs17.pdf
 
 ## Limitations
 
-- Distance is **straight-line**, not travel distance; real road, barge or air routes are longer.
-- We don't know where trades are dispatched from; the nearest NT Housing office is used as an
-  assumed reference point for showing remoteness. Distance never affects rank.
-- Office coordinates are town-level, not the building.
-- A community not in `communities.json` (or misspelt) shows "unknown"; matching is exact, never fuzzy.
-
-
-- Logistics (distance, trade capacity, bundling) is not built; `demo.py` shows distance for display only.
-- No real fault-report data exists; every report and form here is synthetic.
-- Recorded mode only covers report texts that have a recording; any other report is flagged for the live model.
+- The demo reports are synthetic. No real report data exists.
+- There is no labelled set, so extraction accuracy is not measured.
+- Casual wording sometimes loses a hazard (seen in a live probe). The second reader and the re-read mitigate this; they do not solve it. The re-read uses the same prompt at temperature 0, so it mostly catches non-determinism.
+- Jev's 0.7 low-confidence threshold is uncalibrated.
+- Distance is straight-line to the nearest NT Housing office, used as an assumed reference point. We don't know where trades are dispatched from. A community not in `data/communities.json` (or misspelt) shows "unknown"; matching is exact.
 - The offline test double cannot read dialect or informal wording, and never reports an unclear hazard, a sign, a mismatch, harm or worsening.
-- A fault with no schema field, or detail the tenant never gave, is invisible to the system.
-- Faults not on either tier authority (e.g. air conditioning) go to the review band for a coordinator's tier call.
-- Dialect bias in extraction is reduced, not removed.
+- Faults not on the tier table (e.g. air conditioning) go to the review band for a coordinator's tier call.
+- Not built: job bundling, a coordinator override/approval layer, the multi-step SMS sequence, actually sending SMS.
+- The demo's SQLite store is in memory; nothing persists between runs.
+
+## Tests
+
+```bash
+OPENAI_API_KEY= pytest -q                   # 704 passed
+pytest -q && python demo.py --offline       # the full check CI runs (.github/workflows/tests.yml)
+```
+
+Unit, example and Hypothesis property tests. No test calls a paid API: `tests/conftest.py` blanks
+the keys, blocks the OpenAI client and blocks all network calls.
+
+**Mutation testing** here means: for each rule, we deliberately break the code (e.g. let distance
+into the sort key, let Jev lower a safety level), run the tests, confirm at least one fails, then
+revert. A rule whose break no test catches is not considered enforced.
+
+## Folders
+
+- `.github/` CI workflow: install, `pytest -q`, `python demo.py --offline`.
+- `app/` placeholder for the coordinator UI (not built yet).
+- `data/` community and office locations, recorded model responses, synthetic data placeholder.
+- `docs/` design document and build notes.
+- `pdf/` sample GEH repair request forms (synthetic).
+- `reports/` the six synthetic reports the demo reads by default.
+- `scripts/` manual, paid probes: `probe_llm.py` (extractor), `probe_jev.py` (second reader).
+- `tests/` mirrors `triage/`.
+- `triage/` the pipeline stages and their shared models.
+
+## Team
+
+### Running the UI
+
+_To be written by the UI teammate._
