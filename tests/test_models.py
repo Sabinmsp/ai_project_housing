@@ -5,7 +5,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from triage.models import RankedJob, RankInput
+from triage.models import EnrichedJob, RankedJob, RankInput
 
 
 def valid_job() -> dict[str, Any]:
@@ -121,3 +121,21 @@ def test_tally_not_coerced(tally: object) -> None:
 def test_blank_reason_strings_rejected(fields: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         RankedJob(**{"position": 1, "job_id": "R-0000AAAA", "decided_by": "top of list", **fields})
+
+
+def _enriched(**overrides: Any) -> dict[str, Any]:
+    return {"request_id": "R-1", "parent_report_id": "R-1", "community": "Wadeye",
+            "original_report_timestamp": datetime(2026, 9, 1, tzinfo=timezone.utc), "tier": None, "tier_entry": None,
+            "base_points": None, "severity_bump": None, "urgency_tally": None, "tally_reasons": (),
+            "safety_level": "none", "safety_reason": "none", "flags": (), **overrides}
+
+
+@pytest.mark.parametrize(("km", "office"), [(250.0, None), (None, "Palmerston office")])
+def test_distance_and_office_must_come_together(km: float | None, office: str | None) -> None:
+    with pytest.raises(ValidationError, match="nearest_office"):
+        EnrichedJob.model_validate(_enriched(distance_cost_km=km, nearest_office=office))
+
+
+def test_distance_with_office_or_neither_accepted() -> None:
+    EnrichedJob.model_validate(_enriched(distance_cost_km=250.0, nearest_office="Palmerston office"))
+    EnrichedJob.model_validate(_enriched())

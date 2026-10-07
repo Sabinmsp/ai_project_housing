@@ -310,7 +310,9 @@ class EnrichedJob(BaseModel):
     spans: list[VerifiedSpan] = Field(default_factory=list)
 
     # Logistics: display only, never read by the sort (invariant 5)
+    # Straight-line km to nearest_office, rounded to 5; both None when the community is unknown.
     distance_cost_km: Optional[float] = None
+    nearest_office: Optional[str] = None
     capacity_block_flag: bool = False
     next_actionable: Optional[str] = None
     shared_route_opportunities: list[str] = Field(default_factory=list)
@@ -318,6 +320,9 @@ class EnrichedJob(BaseModel):
 
     @model_validator(mode="after")
     def _consistent(self) -> "EnrichedJob":
+        # A km with no office (or the reverse) would render a distance to nowhere.
+        if (self.distance_cost_km is None) != (self.nearest_office is None):
+            raise ValueError("distance_cost_km and nearest_office must both be set or both be None")
         if self.safety_flag != (self.safety_level == "active"):
             raise ValueError(f"safety_flag={self.safety_flag} disagrees with safety_level={self.safety_level!r}")
         if self.urgency_tally is None:

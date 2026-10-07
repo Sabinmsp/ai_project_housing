@@ -53,7 +53,8 @@ def panel_d_job(**overrides: Any) -> EnrichedJob:
             VerifiedSpan(field="hazard", text="water coming through the light fitting", verified=True),
             VerifiedSpan(field="coping_mentioned", text="made up", verified=False),
         ],
-        "distance_cost_km": 412,
+        "distance_cost_km": 250,
+        "nearest_office": "Palmerston office",
     }
     return EnrichedJob(**{**fields, **overrides})
 
@@ -90,7 +91,7 @@ def test_panel_d_trace() -> None:
     assert tr.safety_level == 2 and tr.safety_reason == ACTIVE_REASON
     assert [s.text for s in tr.evidence_spans] == ["water coming through the light fitting"]
     view = render_coordinator(tr)
-    assert "412 km" in view and "not in sort_key" in view
+    assert "~250 km to nearest NT Housing office (Palmerston office) — straight-line; actual dispatch point not known" in view and "not in sort_key" in view
     assert "roof leak" in view and "2024-09-11" in view
     assert "made up" not in view  # unverified spans never reach an audience
 
@@ -117,7 +118,7 @@ def test_tenant_sms_uses_only_trace_fields_and_hides_distance() -> None:
     (tr,) = traces(panel_d_job())
     sms = render_tenant_sms(tr)
     assert "R-2291" in sms
-    assert "km" not in sms and "412" not in sms
+    assert "km" not in sms and "250" not in sms and "office" not in sms
     # Our no-redundancy default, not something the tenant said.
     assert "no other working one" not in sms
 
@@ -164,9 +165,9 @@ def test_coordinator_view_shows_tally_and_safety_reasons() -> None:
 
 
 def test_distance_none_renders_as_unknown() -> None:
-    (tr,) = traces(panel_d_job(distance_cost_km=None))
+    (tr,) = traces(panel_d_job(distance_cost_km=None, nearest_office=None))
     view = render_coordinator(tr)
-    assert "distance unknown" in view and "0 km" not in view
+    assert "unknown (community not in location table)" in view and " km" not in view
 
 
 def test_trace_carries_enriched_job_flags() -> None:
@@ -426,7 +427,7 @@ def test_same_own_facts_different_queue_give_identical_sms(path: str, queue_a: l
 def test_logistics_fields_naming_other_jobs_never_change_the_sms() -> None:
     own = path_job("routine")
     busy = EnrichedJob.model_validate({**own.model_dump(), "shared_route_opportunities": ["R-7D04E8A1"],
-                                       "starvation_line": "3 jobs waiting over 14 days", "distance_cost_km": 412,
+                                       "starvation_line": "3 jobs waiting over 14 days", "distance_cost_km": 412, "nearest_office": "Palmerston office",
                                        "capacity_block_flag": True, "next_actionable": "Thursday"})
     assert tenant_sms(busy) == tenant_sms(own)
     assert "R-7D04E8A1" not in tenant_sms(busy)
@@ -655,7 +656,7 @@ def test_same_own_facts_different_queue_give_identical_why(path: str, queue_a: l
 def test_logistics_fields_naming_other_jobs_never_change_the_why() -> None:
     own = path_job("routine")
     busy = EnrichedJob.model_validate({**own.model_dump(), "shared_route_opportunities": ["R-7D04E8A1"],
-                                       "starvation_line": "3 jobs waiting over 14 days", "distance_cost_km": 412,
+                                       "starvation_line": "3 jobs waiting over 14 days", "distance_cost_km": 412, "nearest_office": "Palmerston office",
                                        "capacity_block_flag": True, "next_actionable": "Thursday",
                                        "flags": ("Possible duplicate (also R-7D04E8A1)",)})
     assert tenant_why(busy) == tenant_why(own)
@@ -706,3 +707,12 @@ def test_every_dangerous_entry_reads_urgent(entry: str) -> None:
     job = hazard_job(entry, fault="drain overflowing", safety="none")
     assert "It's being treated as an urgent repair under NT rules." in tenant_sms(job)
     assert "is booked as an urgent repair." in tenant_why(job)
+
+
+
+def test_review_entry_shows_the_same_distance_row() -> None:
+    job = standard_job("R-AAAA", community="Wadeye", distance_cost_km=250, nearest_office="Palmerston office",
+                       **UNTIERED)
+    assert "~250 km to nearest NT Housing office (Palmerston office) — straight-line; actual dispatch point not known" in render_review_entry(job)
+    unknown = standard_job("R-BBBB", community="Atlantis", **UNTIERED)
+    assert "unknown (community not in location table)" in render_review_entry(unknown)

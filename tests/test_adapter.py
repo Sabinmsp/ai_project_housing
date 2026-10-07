@@ -58,7 +58,7 @@ def test_report_timestamp_becomes_original_timestamp() -> None:
 
 
 def test_distance_carried_for_display() -> None:
-    assert to_rank_input(enriched(distance_cost_km=412.5)).distance_km == 412.5
+    assert to_rank_input(enriched(distance_cost_km=412.5, nearest_office="Palmerston office")).distance_km == 412.5
 
 
 def test_missing_distance_stays_none() -> None:
@@ -80,7 +80,7 @@ def test_naive_timestamp_rejected() -> None:
 
 
 def test_end_to_end_order() -> None:
-    blocked_toilet = enriched(request_id="R-TOILET", urgency_tally=3, distance_cost_km=5.0)
+    blocked_toilet = enriched(request_id="R-TOILET", urgency_tally=3, distance_cost_km=5.0, nearest_office="Casuarina office")
     roof_into_light = enriched(
         request_id="R-ROOF",
         tier="dangerous",
@@ -97,6 +97,7 @@ def test_end_to_end_order() -> None:
         urgency_tally=4,
         original_report_timestamp=MON - timedelta(days=1),
         distance_cost_km=600.0,
+        nearest_office="Palmerston office",
     )
     result = rank([to_rank_input(j) for j in (blocked_toilet, roof_into_light, no_hot_water)])
     assert [entry.job_id for entry in result.ranked] == ["R-ROOF", "R-HOTWATER", "R-TOILET"]

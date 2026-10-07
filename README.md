@@ -63,8 +63,8 @@ No test calls the API: `tests/conftest.py` blocks the OpenAI client.
 - `.github/` CI workflow: install, `pytest -q`, `python demo.py --offline`.
 - `app/` placeholder for the coordinator UI (not built).
 - `data/` distance table, recorded model responses, and a placeholder for synthetic reports.
-  - `communities.json`: NT community coordinates (not read by code yet).
-  - `housing_offices.json`: NT regional housing offices (not read by code yet).
+  - `communities.json`: NT community coordinates and confirmed aliases (see "Data sources").
+  - `housing_offices.json`: NT regional housing offices and their coordinates.
 - `pdf/` sample GEH repair request forms (synthetic).
 - `reports/` the six synthetic reports the demo reads by default.
 - `scripts/` `probe_llm.py`, a manual, paid probe of the live extractor.
@@ -110,7 +110,27 @@ power point in the kitchen is sparking and smells like burning
 - The tenant SMS never shows distance, queue position, `decided_by`, another job's ID, a source or a tier label.
 - A `Report` carries only intake fields.
 
+## Data sources
+
+- **Housing offices:** the office list and addresses come from nt.gov.au, "Contact your local
+  housing office"
+  (https://nt.gov.au/property/social-housing/contacts-and-support-services/contact-your-local-housing-office).
+  Each office's coordinates are its town's, from the `source_url` on its row in
+  `data/housing_offices.json` (Wikipedia town pages).
+- **Communities:** coordinates from the `source_url` on each row of `data/communities.json`
+  (Wikipedia, or Wikidata where no Wikipedia coordinates were used). Aliases are only names that
+  row's own source page confirms: Wadeye (Port Keats), Gunbalanya (Oenpelli), Wurrumiyanga (Nguiu),
+  Hermannsburg (Ntaria) (Hermannsburg, Ntaria), Galiwinku (Galiwin'ku, Elcho Island).
+- **Distance:** haversine great-circle km from the community to the nearest office, rounded to 5 km.
+  Coordinator view only; never read by ranking.
+
 ## Limitations
+
+- Distance is **straight-line**, not travel distance; real road, barge or air routes are longer.
+- We don't know where trades are dispatched from; the nearest NT Housing office is used as an
+  assumed reference point for showing remoteness. Distance never affects rank.
+- Office coordinates are town-level, not the building.
+- A community not in `communities.json` (or misspelt) shows "unknown"; matching is exact, never fuzzy.
 
 
 - Logistics (distance, trade capacity, bundling) is not built; `demo.py` shows distance for display only.

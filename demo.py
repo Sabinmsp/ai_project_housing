@@ -4,7 +4,7 @@ Pipeline: intake -> extraction -> verification -> evaluation -> ranking -> expla
 Input: a folder of .pdf/.txt reports (default reports/; layout in triage/report_files.py).
 Output: the ranked queue, review band, coordinator why-traces and tenant SMS on stdout.
 Logistics is not built yet: `_build_job` runs the real verification and evaluation and
-attaches distance from a static table as a stand-in.
+attaches straight-line distance to the nearest housing office as a stand-in.
 
 Run: python demo.py [folder] [--offline | --record]
 """
@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from triage.adapter import to_rank_input
-from triage.distances import load_distances
+from triage.distances import nearest_office
 from triage.evaluation import evaluate
 from triage.explain import (
     UNKNOWN_REF_REPLY,
@@ -38,8 +38,6 @@ from triage.verification import claim_spans, verify_spans
 REPORTS_DIR = Path(__file__).with_name("reports")
 
 # ---- stand-in until logistics is built: real verification + evaluation, distance lookup --
-_STANDIN_DISTANCE = load_distances()
-
 
 _SAFETY_LEVEL_NAMES = ("none", "conditional", "active")  # index = safety level
 
@@ -58,6 +56,7 @@ def _build_job(report, facts, job_id: str | None = None, extra_flags: tuple[str,
         # D4: extract() routes these out of scope, so evaluation must never see one.
         raise ValueError(f"{report.request_id}: no fault named, should not reach evaluation")
     ev = evaluate(facts, unverified)
+    office = nearest_office(report.community)
     level = _SAFETY_LEVEL_NAMES[ev.safety.level]
     return EnrichedJob(
         request_id=job_id or report.request_id, parent_report_id=report.request_id,
@@ -65,7 +64,8 @@ def _build_job(report, facts, job_id: str | None = None, extra_flags: tuple[str,
         # Invariant 6: every job from a report keeps the report's intake timestamp (FIFO).
         original_report_timestamp=report.original_report_timestamp,
         fault_description=facts.fault_description, taxonomy_match=facts.taxonomy_match,
-        spans=spans, distance_cost_km=_STANDIN_DISTANCE.get(report.community),
+        spans=spans, distance_cost_km=None if office is None else office[1],
+        nearest_office=None if office is None else office[0],
         tier=ev.tier.tier, tier_entry=ev.tally.winner,
         base_points=ev.tally.base, severity_bump=ev.tally.bump,
         urgency_tally=ev.tally.tally, tally_reasons=ev.tally.reasons,
@@ -239,7 +239,7 @@ def main(argv: list[str] | None = None) -> None:
         report_jobs = _build_jobs(report, extraction)
         _save_children(repo, extraction, report_jobs)
         jobs.extend(report_jobs)
-    _heading("VERIFICATION + EVALUATION (code)   distance is a static stand-in for logistics")
+    _heading("VERIFICATION + EVALUATION (code)   distance: straight-line to nearest housing office")
     for report, _ in extracted:
         children = [j for j in jobs if j.parent_report_id == report.request_id]
         if len(children) > 1:

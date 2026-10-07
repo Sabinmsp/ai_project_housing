@@ -3,7 +3,8 @@
     "base_points": 3,
     "capacity_block_flag": false,
     "community": "Darwin",
-    "distance_cost_km": 0.0,
+    "distance_cost_km": 10.0,
+    "nearest_office": "Casuarina office",
     "fault_description": "toilet blocked",
     "flags": [],
     "next_actionable": null,
@@ -45,7 +46,8 @@
     "base_points": 3,
     "capacity_block_flag": false,
     "community": "Wadeye",
-    "distance_cost_km": 412.0,
+    "distance_cost_km": 250.0,
+    "nearest_office": "Palmerston office",
     "fault_description": "toilet blocked",
     "flags": [],
     "next_actionable": null,
@@ -74,7 +76,7 @@
     ],
     "starvation_line": null,
     "tally_reasons": [
-      "No alternative named \u2014 no-redundancy default: +1"
+      "No alternative named — no-redundancy default: +1"
     ],
     "taxonomy_match": [
       "blocked or broken toilet"
@@ -87,14 +89,15 @@
     "base_points": 3,
     "capacity_block_flag": false,
     "community": "Maningrida",
-    "distance_cost_km": 510.0,
+    "distance_cost_km": 280.0,
+    "nearest_office": "Nhulunbuy office",
     "fault_description": "roof leaking",
     "flags": [],
     "next_actionable": null,
     "original_report_timestamp": "2026-09-29T15:00:00+09:30",
     "safety_flag": true,
     "safety_level": "active",
-    "safety_reason": "Active hazard described: 'water coming through the light fitting' \u2014 full override",
+    "safety_reason": "Active hazard described: 'water coming through the light fitting' — full override",
     "severity_bump": 1,
     "shared_route_opportunities": [],
     "spans": [
@@ -116,7 +119,7 @@
     ],
     "starvation_line": null,
     "tally_reasons": [
-      "No alternative named \u2014 no-redundancy default: +1"
+      "No alternative named — no-redundancy default: +1"
     ],
     "taxonomy_match": [
       "roof leak"
@@ -129,7 +132,8 @@
     "base_points": 3,
     "capacity_block_flag": false,
     "community": "Galiwinku",
-    "distance_cost_km": 560.0,
+    "distance_cost_km": 135.0,
+    "nearest_office": "Nhulunbuy office",
     "fault_description": "no hot water",
     "flags": [],
     "next_actionable": null,
@@ -153,7 +157,7 @@
     ],
     "starvation_line": null,
     "tally_reasons": [
-      "No alternative named \u2014 no-redundancy default: +1"
+      "No alternative named — no-redundancy default: +1"
     ],
     "taxonomy_match": [
       "hot water system not working"
@@ -166,7 +170,8 @@
     "base_points": null,
     "capacity_block_flag": false,
     "community": "Wadeye",
-    "distance_cost_km": 412.0,
+    "distance_cost_km": 250.0,
+    "nearest_office": "Palmerston office",
     "fault_description": "the ceiling fan wobbles and makes a noise",
     "flags": [],
     "next_actionable": null,
@@ -194,7 +199,8 @@
     "base_points": 3,
     "capacity_block_flag": false,
     "community": "Darwin",
-    "distance_cost_km": 0.0,
+    "distance_cost_km": 10.0,
+    "nearest_office": "Casuarina office",
     "fault_description": "toilet blocked",
     "flags": [],
     "next_actionable": null,
@@ -218,7 +224,7 @@
     ],
     "starvation_line": null,
     "tally_reasons": [
-      "No alternative named \u2014 no-redundancy default: +1"
+      "No alternative named — no-redundancy default: +1"
     ],
     "taxonomy_match": [
       "blocked or broken toilet"

@@ -52,6 +52,7 @@ class ReasoningTrace(BaseModel):
     queue_length: int
     decided_by: str
     distance_km: float | None
+    nearest_office: str | None
     logistics_notes: tuple[str, ...]
     # Coordinator-only: the tenant sent WHY <ref> for this job.
     tenant_asked_why: bool
@@ -101,6 +102,7 @@ def build_trace(entry: RankedJob, job: EnrichedJob, queue_length: int, asked_why
         queue_length=queue_length,
         decided_by=entry.decided_by,
         distance_km=job.distance_cost_km,
+        nearest_office=job.nearest_office,
         logistics_notes=_logistics_notes(job),
         tenant_asked_why=asked_why,
     )
@@ -346,14 +348,20 @@ def render_coordinator(trace: ReasoningTrace) -> str:
         ("position", f"{trace.position} of {trace.queue_length}", ""),
         ("decided_by", trace.decided_by, ""),
         *([("tenant_contact", "tenant asked why", "")] if trace.tenant_asked_why else []),
-        (
-            "distance",
-            "distance unknown" if trace.distance_km is None else f"{trace.distance_km:g} km",
-            "not in sort_key",
-        ),
+        _distance_row(trace.distance_km, trace.nearest_office),
     ]
     rows += [("logistics", n, "display only") for n in trace.logistics_notes]
     return _table(rows)
+
+
+def _distance_row(km: float | None, office: str | None) -> tuple[str, str, str]:
+    if km is None:
+        return ("distance", "unknown (community not in location table)", "not in sort_key")
+    return (
+        "distance",
+        f"~{km:g} km to nearest NT Housing office ({office}) — straight-line; actual dispatch point not known",
+        "not in sort_key",
+    )
 
 
 def render_review_entry(job: EnrichedJob, asked_why: bool = False) -> str:
@@ -364,6 +372,7 @@ def render_review_entry(job: EnrichedJob, asked_why: bool = False) -> str:
             ("job_id", job.request_id, ""),
             ("fault", _verified_fault_text(job) or "(no verified fault text)", ""),
             ("community", job.community, ""),
+            _distance_row(job.distance_cost_km, job.nearest_office),
             ("original_timestamp", job.original_report_timestamp.isoformat(), "FIFO input, never overwritten"),
             ("review_band", REVIEW_BAND_REASON, ""),
         ]
