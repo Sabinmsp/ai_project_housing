@@ -1,0 +1,188 @@
+[
+  {
+    "name": "Darwin",
+    "lat": -12.43805556,
+    "lon": 130.84111111,
+    "source_url": "https://en.wikipedia.org/wiki/Darwin,_Northern_Territory"
+  },
+  {
+    "name": "Palmerston",
+    "lat": -12.48055556,
+    "lon": 130.98305556,
+    "source_url": "https://en.wikipedia.org/wiki/Palmerston,_Northern_Territory"
+  },
+  {
+    "name": "Katherine",
+    "lat": -14.46138889,
+    "lon": 132.26611111,
+    "source_url": "https://en.wikipedia.org/wiki/Katherine,_Northern_Territory"
+  },
+  {
+    "name": "Tennant Creek",
+    "lat": -19.64722222,
+    "lon": 134.19027778,
+    "source_url": "https://en.wikipedia.org/wiki/Tennant_Creek"
+  },
+  {
+    "name": "Alice Springs",
+    "lat": -23.7,
+    "lon": 133.87,
+    "source_url": "https://en.wikipedia.org/wiki/Alice_Springs"
+  },
+  {
+    "name": "Nhulunbuy",
+    "lat": -12.1825,
+    "lon": 136.78194444,
+    "source_url": "https://en.wikipedia.org/wiki/Nhulunbuy"
+  },
+  {
+    "name": "Wadeye",
+    "lat": -14.23888889,
+    "lon": 129.52194444,
+    "source_url": "https://en.wikipedia.org/wiki/Wadeye"
+  },
+  {
+    "name": "Maningrida",
+    "lat": -12.05,
+    "lon": 134.21666667,
+    "source_url": "https://en.wikipedia.org/wiki/Maningrida,_Northern_Territory"
+  },
+  {
+    "name": "Galiwinku",
+    "lat": -12.0235,
+    "lon": 135.5664,
+    "source_url": "https://www.wikidata.org/wiki/Q30400333"
+  },
+  {
+    "name": "Ngukurr",
+    "lat": -13.73333333,
+    "lon": 134.73333333,
+    "source_url": "https://en.wikipedia.org/wiki/Ngukurr"
+  },
+  {
+    "name": "Borroloola",
+    "lat": -16.07027778,
+    "lon": 136.30722222,
+    "source_url": "https://en.wikipedia.org/wiki/Borroloola"
+  },
+  {
+    "name": "Yirrkala",
+    "lat": -12.25277778,
+    "lon": 136.89166667,
+    "source_url": "https://en.wikipedia.org/wiki/Yirrkala"
+  },
+  {
+    "name": "Gunbalanya",
+    "lat": -12.31666667,
+    "lon": 133.05,
+    "source_url": "https://en.wikipedia.org/wiki/Gunbalanya,_Northern_Territory"
+  },
+  {
+    "name": "Milingimbi",
+    "lat": -12.1033,
+    "lon": 134.921,
+    "source_url": "https://www.wikidata.org/wiki/Q1934778"
+  },
+  {
+    "name": "Ramingining",
+    "lat": -12.32833333,
+    "lon": 134.92777778,
+    "source_url": "https://en.wikipedia.org/wiki/Ramingining,_Northern_Territory"
+  },
+  {
+    "name": "Yuendumu",
+    "lat": -22.255,
+    "lon": 131.79527778,
+    "source_url": "https://en.wikipedia.org/wiki/Yuendumu"
+  },
+  {
+    "name": "Hermannsburg (Ntaria)",
+    "lat": -23.94305556,
+    "lon": 132.77777778,
+    "source_url": "https://en.wikipedia.org/wiki/Hermannsburg,_Northern_Territory"
+  },
+  {
+    "name": "Papunya",
+    "lat": -23.21666667,
+    "lon": 131.9,
+    "source_url": "https://en.wikipedia.org/wiki/Papunya"
+  },
+  {
+    "name": "Kalkarindji",
+    "lat": -17.4484,
+    "lon": 130.833,
+    "source_url": "https://en.wikipedia.org/wiki/Kalkarindji"
+  },
+  {
+    "name": "Lajamanu",
+    "lat": -18.335835,
+    "lon": 130.63834,
+    "source_url": "https://en.wikipedia.org/wiki/Lajamanu,_Northern_Territory"
+  },
+  {
+    "name": "Ali Curung",
+    "lat": -21.003334,
+    "lon": 134.40694,
+    "source_url": "https://en.wikipedia.org/wiki/Ali_Curung"
+  },
+  {
+    "name": "Elliott",
+    "lat": -17.5527,
+    "lon": 133.5408,
+    "source_url": "https://en.wikipedia.org/wiki/Elliott,_Northern_Territory"
+  },
+  {
+    "name": "Wurrumiyanga",
+    "lat": -11.7591,
+    "lon": 130.6347,
+    "source_url": "https://en.wikipedia.org/wiki/Wurrumiyanga"
+  },
+  {
+    "name": "Angurugu",
+    "lat": -13.95888889,
+    "lon": 136.44888889,
+    "source_url": "https://en.wikipedia.org/wiki/Angurugu,_Northern_Territory"
+  },
+  {
+    "name": "Gapuwiyak",
+    "lat": -12.5032,
+    "lon": 135.8057,
+    "source_url": "https://en.wikipedia.org/wiki/Gapuwiyak,_Northern_Territory"
+  },
+  {
+    "name": "Numbulwar",
+    "lat": -14.28333333,
+    "lon": 135.73333333,
+    "source_url": "https://en.wikipedia.org/wiki/Numbulwar"
+  },
+  {
+    "name": "Daly River (Nauiyu)",
+    "lat": -13.75,
+    "lon": 130.69,
+    "source_url": "https://en.wikipedia.org/wiki/Nauiyu_Nambiyu_Community"
+  },
+  {
+    "name": "Belyuen",
+    "lat": -12.5382,
+    "lon": 130.6832,
+    "source_url": "https://en.wikipedia.org/wiki/Belyuen,_Northern_Territory"
+  },
+  {
+    "name": "Pirlangimpi",
+    "lat": -11.38925,
+    "lon": 130.42461944,
+    "source_url": "https://en.wikipedia.org/wiki/Pirlangimpi"
+  },
+  {
+    "name": "Timber Creek",
+    "lat": -15.64527778,
+    "lon": 130.47444444,
+    "source_url": "https://en.wikipedia.org/wiki/Timber_Creek,_Northern_Territory"
+  },
+  {
+    "name": "Pine Creek",
+    "lat": -13.8235,
+    "lon": 131.8262,
+    "source_url": "https://en.wikipedia.org/wiki/Pine_Creek,_Northern_Territory"
+  }
+]
