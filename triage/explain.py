@@ -35,6 +35,9 @@ class ReasoningTrace(BaseModel):
     decided_by: str
     distance_km: float | None
     logistics_notes: tuple[str, ...]
+    # Stage 5 fields carried through for display; neither is read by the sort.
+    distance_estimate_km: float | None = None
+    required_trades: tuple[str, ...] = ()
 
 
 def _verified_fault_text(job: EnrichedJob) -> str | None:
@@ -81,6 +84,8 @@ def build_trace(entry: RankedJob, job: EnrichedJob, queue_length: int) -> Reason
         decided_by=entry.decided_by,
         distance_km=job.distance_cost_km,
         logistics_notes=_logistics_notes(job),
+        distance_estimate_km=job.distance_estimate_km,
+        required_trades=tuple(job.required_trades),
     )
 
 

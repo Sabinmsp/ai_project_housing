@@ -1,0 +1,10 @@
+{
+  "_note": "Approximate coordinates (lat, lon) of NT communities. Stage 5 uses them only for a labelled straight-line distance estimate when data/distances.json has no road distance. Never read by ranking.",
+  "Darwin": [-12.463, 130.846], "Darwin City": [-12.463, 130.846], "Palmerston": [-12.486, 130.984],
+  "Humpty Doo": [-12.567, 131.087], "Wadeye": [-14.238, 129.521], "Maningrida": [-12.052, 134.223],
+  "Galiwinku": [-12.028, 135.565], "Wurrumiyanga": [-11.761, 130.625], "Ngukurr": [-14.729, 134.732],
+  "Yuendumu": [-22.255, 131.792], "Ali Curung": [-20.031, 134.326], "Katherine": [-14.465, 132.264],
+  "Tennant Creek": [-19.649, 134.191], "Alice Springs": [-23.698, 133.880], "Nhulunbuy": [-12.181, 136.781],
+  "Borroloola": [-16.070, 136.307], "Lajamanu": [-18.337, 130.638], "Gunbalanya": [-12.324, 133.050],
+  "Jabiru": [-12.672, 132.833]
+}

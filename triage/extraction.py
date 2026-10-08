@@ -198,6 +198,9 @@ class OpenAICompatibleClient:
                 "type": "json_schema",
                 "json_schema": {"name": "ReportExtraction", "strict": True, "schema": schema},
             },
+            # Opt-in, OpenRouter only: a reasoning model's hidden thinking can use up
+            # MAX_OUTPUT_TOKENS and return empty content. OpenAI's API rejects this field.
+            extra_body={"reasoning": {"enabled": False}} if os.environ.get("TRIAGE_DISABLE_REASONING") else None,
         )
         return resp.choices[0].message.content or ""
 

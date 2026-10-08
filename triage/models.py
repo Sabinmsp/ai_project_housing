@@ -291,7 +291,11 @@ class EnrichedJob(BaseModel):
     spans: list[VerifiedSpan] = Field(default_factory=list)
 
     # Stage 5 logistics: display only, never read by the sort
-    distance_cost_km: Optional[float] = None
+    distance_cost_km: Optional[float] = None  # road distance from data/distances.json; None if not listed
+    # Straight-line estimate from data/communities.json, labelled as such; never replaces the road figure.
+    distance_estimate_km: Optional[float] = None
+    # Trades the matched fault usually needs (triage/trades.py); empty when untiered.
+    required_trades: list[str] = Field(default_factory=list)
     capacity_block_flag: bool = False
     next_actionable: Optional[str] = None
     shared_route_opportunities: list[str] = Field(default_factory=list)
