@@ -4,10 +4,19 @@ Reads free-text repair reports from NT public housing tenants and ranks them: sa
 urgency, then earliest report. Every position comes with an explanation. Distance to the nearest
 housing office is shown to the coordinator but never used to rank.
 
+Two ways to run it, over the same pipeline (`triage/pipeline.py`):
+
+- **Web app** (`app/`): officers upload reports, the coordinator works the ranked queue and assigns tradies.
+- **Command line** (`demo.py`): runs a folder of reports and prints every stage.
+
+The only AI step is extraction. It reads the tenant's words and returns facts with quotes;
+it never scores or ranks. The recorded answers in `data/recorded/` come from **Claude Sonnet 5.5**
+(Anthropic), called through OpenRouter.
+
 ## Pipeline
 
 ```
-intake ─► extraction (gpt-4o) ─► second reader (Jev, flag only) ─► re-read safety net
+intake ─► extraction (LLM) ─► second reader (Jev, flag only) ─► re-read safety net
        ─► span verification ─► evaluation (tier table) ─► ranking
        ─► explanation (coordinator trace, tenant SMS, WHY answer)
 ```
@@ -21,19 +30,36 @@ intake ─► extraction (gpt-4o) ─► second reader (Jev, flag only) ─► r
 | verification | `triage/verification.py` | Checks every quote is in the tenant's text. |
 | evaluation | `triage/evaluation.py`, `triage/tiers.py` | Tier from the tier table, urgency tally, safety level, reasoned flags. |
 | ranking | `triage/adapter.py`, `triage/ranking.py` | `sort_key = (-safety_level, tally-less first, -tally, original_timestamp, job_id)`; jobs with no tier and no safety trigger go to the review band. |
+| logistics | `triage/distances.py`, `triage/trades.py` | Straight-line km to the nearest NT housing office, and the trade the fault needs. Display only. |
 | explanation | `triage/explain.py` | Coordinator trace, tenant SMS, answer to `WHY <ref>`. |
+
+`triage/pipeline.py` wires the stages together; `demo.py` and `app/server.py` both call it, so the
+command line and the web app always give the same result.
 
 ## Quick start
 
+Needs **Python 3.10 or newer** (3.12 is what CI uses).
+
 ```bash
+python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+export TRIAGE_MODEL=anthropic/claude-sonnet-5.5   # needed to replay the recorded answers (no key)
+python -m app.server                              # web app: http://127.0.0.1:8040
+python demo.py                                    # or the command line
 ```
 
-Optional `.env` in the repo root (git-ignored):
+**Why `TRIAGE_MODEL`:** recorded answers are only replayed for the model they were recorded with,
+and the code's default model is `gpt-4o`. Without this line every report is flagged
+"Needs the live model" (nothing is guessed). The recordings cover the 6 reports in `reports/` and
+21 of the 22 issue rows in the GEHSF03 forms in `pdf/`.
+
+Optional `.env` in the repo root (git-ignored), for live extraction:
 
 ```
-OPENAI_API_KEY=sk-...        # live extraction (TRIAGE_API_KEY also works)
-TYPESAFE_API_KEY=...         # optional: second reader (Jev)
+TRIAGE_API_KEY=sk-or-...                      # OpenRouter key (OPENAI_API_KEY also works, with OpenAI)
+TRIAGE_BASE_URL=https://openrouter.ai/api/v1  # any OpenAI-compatible endpoint
+TRIAGE_MODEL=anthropic/claude-sonnet-5.5      # the model the recordings were made with
+TYPESAFE_API_KEY=...                          # optional: second reader (Jev)
 ```
 
 Run modes (`demo.py` prints its mode first):
@@ -47,13 +73,13 @@ python demo.py pdf           # any folder of reports, e.g. the GEH forms in pdf/
 
 | Mode | When | Reads reports with | Second reader |
 |---|---|---|---|
-| live | `OPENAI_API_KEY` or `TRIAGE_API_KEY` set | gpt-4o (paid calls; `TRIAGE_MODEL` / `TRIAGE_BASE_URL` override) | Jev if `TYPESAFE_API_KEY` set, else "not run (no key)" |
-| recorded | no key | real gpt-4o answers saved in `data/recorded/` for the 6 demo reports; a report with no recording is flagged for a human, never guessed | "not run (recorded mode)" |
+| live | `OPENAI_API_KEY` or `TRIAGE_API_KEY` set | `TRIAGE_MODEL` (default gpt-4o) at `TRIAGE_BASE_URL` (default OpenAI); paid calls | Jev if `TYPESAFE_API_KEY` set, else "not run (no key)" |
+| recorded | no key | real Claude Sonnet 5.5 answers saved in `data/recorded/` (set `TRIAGE_MODEL=anthropic/claude-sonnet-5.5`); a report with no recording is flagged for a human, never guessed | "not run (recorded mode)" |
 | record | `--record` | live, saving each response | Jev if keyed; no re-read (it would overwrite the recording) |
 | offline | `--offline` | a regex test double, not the real extractor (CI only) | "not run (offline)" |
 
 To run recorded mode with a key in `.env`, blank the key for that run:
-`OPENAI_API_KEY= TRIAGE_API_KEY= python demo.py`.
+`OPENAI_API_KEY= TRIAGE_API_KEY= TRIAGE_MODEL=anthropic/claude-sonnet-5.5 python demo.py`.
 
 Other commands:
 
@@ -74,9 +100,11 @@ maintenance call centre on 1800 104 076." The coordinator view then marks the jo
 `triage/` and shows the results. Needs Python 3.10+.
 
 ```bash
-pip install -r requirements.txt
-python -m app.server        # then open http://127.0.0.1:8040
+source .venv/bin/activate
+TRIAGE_MODEL=anthropic/claude-sonnet-5.5 python -m app.server   # then open http://127.0.0.1:8040
 ```
+
+Press Ctrl+C to stop it. `PORT=8050` uses another port if 8040 is busy.
 
 It starts empty and never loads sample files. A report enters only when someone uploads a
 document (a GEHSF03 PDF, one report per issue row, or a .txt report) or records a call; it then
@@ -87,7 +115,9 @@ rebuilds the queue without calling the model again. Reports → Clear all data e
 
 Stage 2 reuses the model's saved answer when the exact same text was read before
 (`data/recorded/`). New text is read live with `TRIAGE_LIVE=1` and a funded key (the answer is
-saved for next time); without that it is flagged for a human, never guessed.
+saved for next time, in `data/recorded/by_model/<model>/` so one model never overwrites
+another's); without that it is flagged for a human, never guessed. The second reader runs only in
+live mode with `TYPESAFE_API_KEY`, as in `demo.py`.
 `TRIAGE_OFFLINE_FALLBACK=1` uses the labelled regex stand-in instead. `PORT=...` changes the port.
 
 Sign in with a prototype account (not production sign-in):
@@ -147,7 +177,7 @@ toilet blocked
 
 ## What the coordinator sees
 
-Excerpt from `OPENAI_API_KEY= TRIAGE_API_KEY= python demo.py` (recorded mode, `reports/T-03_maningrida.pdf`):
+Excerpt from `OPENAI_API_KEY= TRIAGE_API_KEY= TRIAGE_MODEL=anthropic/claude-sonnet-5.5 python demo.py` (recorded mode, `reports/T-03_maningrida.pdf`):
 
 ```
 #1
@@ -222,13 +252,16 @@ listing each repair and its ref.
 - Distance is straight-line to the nearest NT Housing office, used as an assumed reference point. We don't know where trades are dispatched from. A community not in `data/communities.json` (or misspelt) shows "unknown"; matching is exact.
 - The offline test double cannot read dialect or informal wording, and never reports an unclear hazard, a sign, a mismatch, harm or worsening.
 - Faults not on the tier table (e.g. air conditioning) go to the review band for a coordinator's tier call.
-- Not built: job bundling, a coordinator override/approval layer, the multi-step SMS sequence, actually sending SMS.
-- The demo's SQLite store is in memory; nothing persists between runs.
+- Not built: automatic job bundling (the web app only shows same-community jobs), the multi-step SMS sequence, actually sending SMS.
+- `demo.py`'s SQLite store is in memory. The web app saves to `data/fairfix.db` (git-ignored).
+- The web app's sign-in uses two prototype accounts with passwords in the code. Not production authentication.
+- Tradie recommendations use a five-tradie demo roster and straight-line distance from each tradie's home base.
+- Recorded answers replay only for the model they were made with (see Quick start).
 
 ## Tests
 
 ```bash
-OPENAI_API_KEY= pytest -q                   # 704 passed
+OPENAI_API_KEY= pytest -q                   # 729 passed
 pytest -q && python demo.py --offline       # the full check CI runs (.github/workflows/tests.yml)
 ```
 
@@ -242,17 +275,32 @@ revert. A rule whose break no test catches is not considered enforced.
 ## Folders
 
 - `.github/` CI workflow: install, `pytest -q`, `python demo.py --offline`.
-- `app/` placeholder for the coordinator UI (not built yet).
+- `app/` the web app: `server.py` (FastAPI, sign-in, API, SQLite) and `static/` (the UI; Tailwind and Lucide vendored for offline use).
 - `data/` community and office locations, recorded model responses, synthetic data placeholder.
 - `docs/` design document and build notes.
-- `pdf/` sample GEH repair request forms (synthetic).
+- `pdf/` sample GEH repair request forms (synthetic) to upload in the web app or run with `python demo.py pdf`.
 - `reports/` the six synthetic reports the demo reads by default.
 - `scripts/` manual, paid probes: `probe_llm.py` (extractor), `probe_jev.py` (second reader).
 - `tests/` mirrors `triage/`.
-- `triage/` the pipeline stages and their shared models.
+- `triage/` the pipeline stages, their shared models, and `pipeline.py` which wires them.
 
 ## Team
 
 ### Running the UI
 
-_To be written by the UI teammate._
+See [Web workspace](#web-workspace-coordinator-ui) above. In short:
+
+```bash
+source .venv/bin/activate
+TRIAGE_MODEL=anthropic/claude-sonnet-5.5 python -m app.server
+```
+
+Open http://127.0.0.1:8040, sign in as `admin` / `Admin1!` (coordinator) or `officer` / `Officer1!`,
+then **Upload report** with a form from `pdf/`.
+
+### AI used
+
+- Extraction: Claude Sonnet 5.5 (Anthropic) via OpenRouter, for the recorded answers. Any
+  OpenAI-compatible model can be set with `TRIAGE_MODEL`.
+- Second reader: Jev (TypeSafe AI), live mode only.
+- Development: Claude Code was used to help write code, tests and documentation.
