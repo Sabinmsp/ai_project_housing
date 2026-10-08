@@ -4,3 +4,8 @@ hypothesis>=6.90
 pypdf>=4.0  # reads PDF reports in reports/
 # optional, for the real LLM extractor
 openai>=1.40
+# web workspace (app/)
+fastapi>=0.110
+uvicorn>=0.27
+python-multipart>=0.0.9  # form uploads
+httpx>=0.27  # FastAPI's test client

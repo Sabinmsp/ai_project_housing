@@ -55,6 +55,56 @@ python demo.py some/folder # or any other folder
 
 Recorded answers go through the same validation as live ones. For a live run, set `TRIAGE_API_KEY` (or `OPENAI_API_KEY`), and optionally `TRIAGE_MODEL` and `TRIAGE_BASE_URL` for any OpenAI-compatible endpoint (OpenRouter and LiteLLM proxy work), in the environment or a git-ignored `.env` file.
 
+## Web workspace (coordinator UI)
+
+`app/` is a browser front end over the same pipeline: the server owns no scoring, it calls
+`triage/` and shows the results. Needs Python 3.10+.
+
+```bash
+pip install -r requirements.txt
+python -m app.server        # then open http://127.0.0.1:8040
+```
+
+It starts empty and never loads sample files. A report enters only when someone uploads a
+document (a GEHSF03 PDF, one report per issue row, or a .txt report) or records a call; it then
+runs through `triage/pipeline.py`, the same Stages 1 to 6 the CLI uses, and the page shows what
+each stage produced. Reports, each report's Stage 2 result and every coordinator decision are
+saved in SQLite (`data/fairfix.db`, git-ignored; `FAIRFIX_DB=...` to move it), so a restart
+rebuilds the queue without calling the model again. Reports → Clear all data empties it.
+
+Stage 2 reuses the model's saved answer when the exact same text was read before
+(`data/recorded/`). New text is read live with `TRIAGE_LIVE=1` and a funded key (the answer is
+saved for next time); without that it is flagged for a human, never guessed.
+`TRIAGE_OFFLINE_FALLBACK=1` uses the labelled regex stand-in instead. `PORT=...` changes the port.
+
+Sign in with a prototype account (not production sign-in):
+
+| Account | Password | Can do |
+|---|---|---|
+| `officer` | `Officer1!` | Record a phone call or message, upload a GEHSF03 / .txt form, see their own submissions and progress (never the priority) |
+| `admin` | `Admin1!` | Work the queue, make tier calls, assign tradies, close jobs, see fairness |
+
+| Admin page | What it shows |
+|---|---|
+| Dashboard | Open requests, critical, high priority, tradie matches; the top of the priority queue; workload |
+| Upload report | Upload a document or record a call; shows the Stage 1 to 6 result for each report |
+| Repair Requests | Every report, filterable: needs a read, review band, open, assigned, completed |
+| Priority Queue | The review band, then the ranked queue with each job's reason |
+| Job (click a row) | The exact text the model read, its facts with each quote checked, the why-trace, tenant SMS and "why is my repair here?" answer, tier call, **assign a tradie** with recommendations, close or reopen, follow-up (escalation), audit trail |
+| Communities | Open jobs, safety jobs and the oldest wait per community |
+| Fairness Monitor | What a nearest-first queue would do instead (comparison only) |
+| Tradies | The roster (5 demo tradies), availability, current assignments, add a tradie |
+| Reports | Counts by priority, NT category, status and community; CSV export |
+
+The UI uses Tailwind and Lucide icons, both vendored in `app/static/vendor/` so it works offline.
+"Priority" labels (Critical, High, Medium, Low) are display names for the pipeline's safety level
+and urgency score; the order always comes from Stage 6.
+
+**Tradie recommendations** are advice for one job: qualified for the fault's trade, available,
+already assigned in the same community (one trip, two jobs), then nearest home base, then
+lightest workload. They pick *who* goes, never *which job* goes first, and the admin decides.
+Every decision needs a note and is kept in the audit trail. None of it changes the ranking rules.
+
 ## Adding a report
 
 Drop a `.pdf` or `.txt` file into `reports/`, one report per file, in this layout:
