@@ -1,6 +1,9 @@
-"""Stage "evaluation": pure functions from extracted facts to tier, tally and safety (master §4).
+"""Evaluation: the policy applied to one fault's facts (master §3.5, §4).
 
-No I/O, no model.
+Pipeline: intake -> extraction -> verification -> evaluation -> ranking -> explain.
+Input: ExtractedFacts plus verification's unverified (field, quote) pairs. Output: an
+Evaluation with tier, urgency tally, safety level and reasoned flags. The model reports
+facts; this code applies policy. Pure functions, no I/O, no model.
 """
 
 from collections.abc import Sequence
@@ -26,6 +29,8 @@ UNVERIFIED_SIGN = "Sign-only reading, but the quote isn't in the report — scor
 
 
 class TierResult(BaseModel):
+    """The tier-table entries matched, the tier taken, and an ambiguity flag if several."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     entries: tuple[FaultEntry, ...]
@@ -34,7 +39,11 @@ class TierResult(BaseModel):
 
 
 def lookup_tier(taxonomy_match: Sequence[str]) -> TierResult:
-    """Look up each matched fault in TIER_TABLE; several matches take the highest tier, flagged."""
+    """Look up each matched fault in TIER_TABLE; several matches take the highest tier, flagged.
+
+    Raises:
+        ValueError: a name is not in TIER_TABLE.
+    """
     unknown = [n for n in dict.fromkeys(taxonomy_match) if n not in TIER_TABLE]
     if unknown:
         raise ValueError(f"fault not in TIER_TABLE: {', '.join(map(repr, unknown))}")
@@ -55,6 +64,8 @@ def lookup_tier(taxonomy_match: Sequence[str]) -> TierResult:
 
 
 class TallyResult(BaseModel):
+    """Urgency tally = base + bump, the entry that produced it, and why."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     tally: int | None = Field(ge=2, le=4)
@@ -89,10 +100,10 @@ def compute_tally(tier: TierResult, facts: ExtractedFacts, unverified: Unverifie
 
     def score(entry: FaultEntry) -> tuple[int, int, str, tuple[str, ...]]:
         zero_reasons = []
-        if entry.degraded:  # FR2t: dripping or stiff taps leave the function working (§4.3).
+        if entry.degraded:  # FR2t, §4.3: dripping or stiff taps leave the function working.
             zero_reasons.append(DEGRADED)
-        # §4.3 no-redundancy default: only an alternative removes the +1. G2a: coping never
-        # counts, so coping_mentioned is deliberately not read.
+        # §4.3 no-redundancy default: only an alternative removes the +1. Urgency G2a: coping
+        # never counts, so coping_mentioned is deliberately not read.
         if alternative:
             zero_reasons.append(ALTERNATIVE)
         if sign:  # §4.2 sign vs fault: a sign gets the tier of its fault but no +1.
@@ -123,6 +134,8 @@ NO_HAZARD = "No hazard mechanism described"
 
 
 class SafetyResult(BaseModel):
+    """Safety level (0 none, 1 conditional, 2 active), its reason, and any flags."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     level: int = Field(ge=0, le=2)
@@ -131,8 +144,8 @@ class SafetyResult(BaseModel):
 
 
 def _quote(facts: ExtractedFacts, field: str, unverified: Unverified) -> str:
-    # Cite a verified quote when there is one, so a reason never repeats words the report doesn't
-    # contain. The validator guarantees a span for every claimed field, so texts is never empty.
+    # Cite a verified quote when there is one, so a reason never repeats words that aren't the
+    # tenant's. The validator guarantees a span for every claimed field, so texts is never empty.
     texts = [s.text for s in facts.quoted_spans if s.field == field]
     return next((t for t in texts if (field, t) not in unverified), texts[0])
 
@@ -143,7 +156,7 @@ def _none_verified(facts: ExtractedFacts, field: str, unverified: Unverified) ->
 
 def compute_safety(facts: ExtractedFacts, unverified: Unverified) -> SafetyResult:
     """Safety level 0-2 from the hazard reading, plus flags for unclear or claimed-only harm."""
-    # §4.4, Safety G1: safety is independent of tier, so taxonomy_match is never read.
+    # §3.5, §4.5: safety is independent of tier, so taxonomy_match is never read.
     flags: list[str] = []
     if facts.hazard_status == "described":
         quote = _quote(facts, "hazard", unverified)
@@ -152,7 +165,7 @@ def compute_safety(facts: ExtractedFacts, unverified: Unverified) -> SafetyResul
             level, reason = 2, f"Active hazard described: '{quote}' — full override"
         else:
             level, reason = 1, f"Conditional hazard described: '{quote}' — elevated, does not bypass active hazards"
-        # D3: a described pathway always wins, so harm_claimed adds no G5 flag (§4.5).
+        # §4.5: a described pathway always wins over G5, so harm_claimed adds no flag.
     elif facts.hazard_status == "unclear":
         quote = _quote(facts, "hazard", unverified)
         # §4.5 / invariant 8: unclear errs high to conditional. Self-mitigation is not a field,
@@ -175,7 +188,7 @@ def compute_safety(facts: ExtractedFacts, unverified: Unverified) -> SafetyResul
     return SafetyResult(level=level, reason=reason, flags=tuple(flags))
 
 
-# FR16c: these two only flag. They never return or change a tally or level.
+# FR16c: these two only flag. They never change a tally or level.
 
 
 def mismatch_flag(facts: ExtractedFacts, tier: TierResult, unverified: Unverified) -> Reason | None:
@@ -185,7 +198,7 @@ def mismatch_flag(facts: ExtractedFacts, tier: TierResult, unverified: Unverifie
     claim, detail = _quote(facts, "mismatch_claim", unverified), _quote(facts, "mismatch_detail", unverified)
     if facts.claim_mismatch == "over":
         return f"Claim stronger than the report's own details: '{claim}' vs '{detail}' — check before acting"
-    # §3.2.2 Field 8: the model never sees tiers, so code keeps "under" for dangerous-tier faults only.
+    # §3.2.2: the model never sees tiers, so code keeps "under" for dangerous-tier faults only.
     if tier.tier == "dangerous":
         return f"Report plays down a fault on the repair-first list: '{claim}' vs '{detail}' — check before scheduling"
     return None
@@ -203,6 +216,8 @@ def unverified_flag(facts: ExtractedFacts, unverified: Unverified) -> Reason | N
 
 
 class Evaluation(BaseModel):
+    """Everything evaluation decided about one fault."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     tier: TierResult
@@ -213,7 +228,12 @@ class Evaluation(BaseModel):
 
 
 def evaluate(facts: ExtractedFacts, unverified: Unverified) -> Evaluation:
-    """Tier, tally, safety and every flag for one report's extracted facts."""
+    """Tier, tally, safety and every flag for one fault's extracted facts.
+
+    Raises:
+        ValueError: no fault is named, or unverified holds a pair that isn't one of the
+            facts' quoted spans.
+    """
     # D4: evaluation must never score a report that names no fault.
     if not facts.fault_description:
         raise ValueError("no fault named — out of scope, route to coordinator contact (master §3.2.4)")

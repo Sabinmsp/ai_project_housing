@@ -52,14 +52,16 @@ def test_a_report_flows_through_all_six_stages():
     assert (trace.urgency_tally, trace.base_points, trace.severity_bump) == (s4.tally.tally, s4.tally.base, s4.tally.bump)
     assert trace.original_timestamp == report.original_report_timestamp
     assert trace.required_trades == tuple(s5.required_trades) == ("Plumber",)
-    assert trace.distance_km == s5.distance_cost_km == 412.0 and s5.distance_estimate_km is None
+    # Stage 5's distance is the nearest housing office, carried unchanged into the trace.
+    assert (trace.distance_km, trace.nearest_office) == (s5.distance_cost_km, s5.nearest_office)
+    assert s5.distance_cost_km is not None and s5.nearest_office
 
 
-def test_estimate_only_when_no_road_distance_and_never_in_the_road_field():
+def test_an_unlisted_community_gets_no_distance_rather_than_a_guess():
     report = create_report(tenant_id="T-2", raw_text="toilet blocked", source_tag="officer",
-                           community="Yuendumu", original_report_timestamp=datetime(2026, 9, 20, 9, tzinfo=NT))
+                           community="Humpty Doo", original_report_timestamp=datetime(2026, 9, 20, 9, tzinfo=NT))
     (job,) = pipeline.build_jobs(report, OfflineExtractor.read(report.raw_text).faults)
-    assert job.distance_cost_km is None and job.distance_estimate_km and job.distance_estimate_km > 1000
+    assert job.distance_cost_km is None and job.nearest_office is None
 
 
 def test_every_listed_fault_has_a_required_trade():

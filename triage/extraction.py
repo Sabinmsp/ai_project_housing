@@ -1,8 +1,9 @@
-"""Stage 2: Extraction. The only model call in the system.
+"""Extraction: the only stage where a model reads anything.
 
-The model answers reading questions only. It receives the report text and a
-flat list of fault NAMES. It never sees tiers, points, scoring rules, other
-jobs or rank positions, so it structurally cannot influence a score.
+Pipeline: intake -> extraction -> verification -> evaluation -> ranking -> explain.
+Input: one Report. Output: an ExtractionResult holding a ReportExtraction (facts with quoted
+spans, one entry per fault) or a flag for a human. The model sees the report text and the
+fault names only, never tiers, points, scoring rules or other jobs.
 """
 from __future__ import annotations
 
@@ -137,12 +138,16 @@ hazard, harm_claimed, fault_or_sign, mismatch_claim, mismatch_detail, worsening_
 def build_user_prompt(raw_text: str, fault_names: tuple[str, ...] = FAULT_NAMES) -> str:
     """The per-report message: the fault-name list and the report text verbatim."""
     faults = "\n".join(f"- {name}" for name in fault_names)
-    # The REPORT TEXT block format is also parsed by OfflineExtractor.complete_json.
+    # report_text_from_prompt parses this block back out; keep the two in step.
     return f"FAULT LIST:\n{faults}\n\nREPORT TEXT:\n<<<\n{raw_text}\n>>>"
 
 
 def report_text_from_prompt(user: str) -> str:
-    """The report text inside a message built by build_user_prompt."""
+    """The report text inside a message built by build_user_prompt.
+
+    Raises:
+        ValueError: the message has no REPORT TEXT block.
+    """
     m = re.search(r"REPORT TEXT:\n<<<\n(.*)\n>>>", user, re.S)
     if m is None:
         raise ValueError("user prompt has no REPORT TEXT block")
@@ -150,6 +155,8 @@ def report_text_from_prompt(user: str) -> str:
 
 
 class LLMClient(Protocol):
+    """Anything extract() can call: live, recorded, recording or offline."""
+
     name: str
 
     def complete_json(self, system: str, user: str, schema: dict) -> str:
@@ -157,9 +164,8 @@ class LLMClient(Protocol):
         ...
 
 
-# One report's facts and quotes fit comfortably in this. Without a cap the
-# provider reserves the model's maximum (65k tokens) against the account
-# balance for every call.
+# One report's facts and quotes fit easily. Without a cap the provider reserves the model's
+# maximum (65k tokens) against the account balance on every call.
 MAX_OUTPUT_TOKENS = 1024
 
 # Probe 2026-10-06 gave 0/21 validation failures vs 17/21 for gpt-4o-mini.
@@ -188,6 +194,7 @@ class OpenAICompatibleClient:
         )
 
     def complete_json(self, system: str, user: str, schema: dict) -> str:
+        """One structured-output call at temperature 0; returns the raw JSON text."""
         resp = self._client.chat.completions.create(
             model=self.model,
             temperature=0,
@@ -205,9 +212,8 @@ class OpenAICompatibleClient:
         return resp.choices[0].message.content or ""
 
 
-# Keywords strict mode does not accept, plus "description": Pydantic fills it
-# from docstrings written for developers
-# (which mention scores), and the model must never see scoring language.
+# Keywords strict mode rejects, plus "description": Pydantic fills it from developer
+# docstrings, which mention scores, and the model must never see scoring language.
 _DROP_FROM_SCHEMA = ("default", "minLength", "maxLength", "description")
 
 
@@ -237,6 +243,7 @@ def response_schema() -> dict:
 
 
 def _parse(raw_json: str, fault_names: tuple[str, ...]) -> ReportExtraction:
+    """Validate the model's JSON; a fault name not on the list raises ValueError."""
     extraction = ReportExtraction.model_validate_json(raw_json)
     unknown = [m for f in extraction.faults for m in f.taxonomy_match if m not in fault_names]
     if unknown:
@@ -253,7 +260,13 @@ def _redact(text: str) -> str:
 
 def extract(report: Report, client: LLMClient,
             fault_names: tuple[str, ...] = FAULT_NAMES) -> ExtractionResult:
-    """One model call, validated at the boundary. Retry once, then flag for a human."""
+    """One model call, validated at the boundary. Retry once, then flag for a human.
+
+    Returns:
+        status OK with the extraction, NO_FAULT_NAMED for an empty faults list, or
+        FLAGGED_FOR_HUMAN with both attempts' errors. Never raises for a bad answer or a
+        provider error, so one report can't stop the run.
+    """
     schema = response_schema()
     user = build_user_prompt(report.raw_text, fault_names)
     errors: list[str] = []
@@ -279,9 +292,9 @@ def extract(report: Report, client: LLMClient,
 
 
 # ---------------------------------------------------------------------------
-# Offline fallback: deterministic keyword reader for demos without an API key.
-# It produces the same ExtractedFacts contract, so Stages 3 to 6 cannot tell
-# the difference. It is deliberately conservative: unknown text -> no match.
+# Offline test double (demo.py --offline, CI): a regex reader, not the real extractor.
+# It returns the same ReportExtraction contract so later stages run unchanged. It is
+# deliberately conservative: unknown text gives no match.
 # ---------------------------------------------------------------------------
 
 _FAULT_PATTERNS: dict[str, str] = {
@@ -305,8 +318,8 @@ _FAULT_PATTERNS: dict[str, str] = {
 }
 _ALTERNATIVE = r"\busing the other (one|toilet|shower|bathroom)\b|\bother (toilet|shower|bathroom) (works|is working|still works)\b"
 _COPING = r"\b(bucket|neighbou?r'?s|the servo|servo|the shop|the clinic|family'?s place)\b"
-# A fault is described but not one on the list: this must reach the REVIEW
-# BAND (fault_description set, taxonomy_match empty), not "no fault named".
+# A fault that is described but not on the list must reach the review band
+# (fault_description set, taxonomy_match empty), not "no fault named".
 _GENERIC_FAULT = r"[^.,\n]*\b(broken|busted|not working|wobbl\w*|leak\w*|cracked|smashed|stuck|falling|blocked|dead|faulty|damaged|won'?t (open|close|work|turn))\b[^.,\n]*"
 _INTERMITTENT =r"\b(comes and goes|on and off|sometimes|now and then)\b"
 _ACTIVE_HAZARD = r"water (is )?coming (through|out of) the (light|power point|switch)[^.\n]*|\bsparking\b[^.\n]*|\bsmell (of )?gas\b[^.\n]*|\bexposed wires?\b[^.\n]*"
@@ -314,9 +327,13 @@ _CONDITIONAL_HAZARD = r"\bif it rains\b[^.\n]*|\bwhen it rains\b[^.\n]*"
 
 
 class OfflineExtractor:
+    """Regex test double behind the LLMClient interface. Never emits unclear, sign,
+    mismatch, harm or worsening."""
+
     name = "offline"
 
     def complete_json(self, system: str, user: str, schema: dict) -> str:
+        """Read the report out of the user message; system and schema are ignored."""
         return self.read(report_text_from_prompt(user)).model_dump_json()
 
     @staticmethod
@@ -380,13 +397,3 @@ class OfflineExtractor:
             worsening_mentioned=False,
             quoted_spans=spans,
         )
-
-
-def default_client() -> LLMClient:
-    """LLM if a key is configured, otherwise the offline reader."""
-    if os.environ.get("TRIAGE_API_KEY") or os.environ.get("OPENAI_API_KEY"):
-        try:
-            return OpenAICompatibleClient()
-        except ImportError:
-            pass
-    return OfflineExtractor()

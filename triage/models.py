@@ -1,9 +1,9 @@
-"""Pydantic models passed between triage stages.
+"""Pydantic models at every stage boundary of the pipeline.
 
-Ranking input/output (RankInput, RankedJob, RankResult), intake (SourceTag,
-Report), extraction (QuotedSpan, ExtractedFacts, ReportExtraction, ExtractionStatus,
-ExtractionResult) and the enriched job ranking is fed from (VerifiedSpan,
-EnrichedJob).
+Pipeline: intake -> extraction -> verification -> evaluation -> ranking -> explain.
+Intake makes a Report; extraction returns ReportExtraction/ExtractedFacts inside an
+ExtractionResult; the later stages produce an EnrichedJob, which ranking reads as a
+RankInput and answers with a RankResult. No logic beyond validation lives here.
 """
 from __future__ import annotations
 
@@ -15,26 +15,28 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validato
 
 from triage.tiers import TIER_TABLE
 
-# Invariant 7: pattern is a regex search, so r"\S" requires at least one non-space character.
+# Invariant 9: every flag is a specific reason. pattern is a regex search, so r"\S" requires
+# at least one non-space character.
 Reason = Annotated[str, Field(pattern=r"\S")]
 
 
 class RankInput(BaseModel):
-    # frozen: assignment after creation raises ValidationError.
-    # extra="forbid": unknown fields (e.g. an override) are rejected, not silently dropped.
+    """One job as ranking sees it: the sort key's fields plus distance for display."""
+
+    # extra="forbid": an override or other unknown field is rejected, not silently dropped.
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    # §3.4, NFR5: IDs never encode region. str so Stage 1's request_id passes through unchanged;
-    # strict rejects non-str values (e.g. a UUID object) instead of coercing them.
+    # Invariant 7, master §3.1: IDs never encode region, so the job_id tie-break is neutral.
+    # str so intake's request_id passes through unchanged; strict rejects a UUID object.
     job_id: str = Field(strict=True, min_length=1)
     # Safety G3: 0 none, 1 conditional, 2 active. strict blocks coercion, so True or "2" fail.
     safety_level: int = Field(strict=True, ge=0, le=2)
-    # Urgency G1/G2: None = no tier. No default, so callers must state it. strict: "4" and 4.0 fail.
+    # Urgency G1/G2: None = no tier. No default, so callers must say so. strict: "4" and 4.0 fail.
     tally: int | None = Field(strict=True, ge=2, le=4)
     # FIFO tie-break: AwareDatetime rejects naive times, which can't be compared safely.
     original_timestamp: AwareDatetime
-    # Logistics G1: carried for display; rank() must never read it. None = unknown, so a
-    # display never shows a missing distance as 0 km.
+    # Logistics G1, invariant 5: carried for display only; rank() never reads it (equity:
+    # distance would favour town). None = unknown, so a missing distance never shows as 0 km.
     # allow_inf_nan=False: ge=0 alone lets inf through.
     distance_km: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
@@ -50,6 +52,8 @@ class RankInput(BaseModel):
 
 
 class RankedJob(BaseModel):
+    """One ranked position, its flags, and why it sits below the job above."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     position: int = Field(ge=1)
@@ -60,6 +64,8 @@ class RankedJob(BaseModel):
 
 
 class RankResult(BaseModel):
+    """ranking output: the review band (held outside the sort) and the ranked queue."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     # No tier and no safety trigger: awaits a tier call instead of being ranked.
@@ -68,10 +74,12 @@ class RankResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Stage 1: Intake
+# Intake
 # ---------------------------------------------------------------------------
 
 class SourceTag(str, Enum):
+    """Who wrote the text: an officer's transcription or the tenant."""
+
     OFFICER = "officer"              # transcribed phone call
     TENANT_DIRECT = "tenant_direct"  # self-filled web form / email
 
@@ -89,7 +97,7 @@ class Report(BaseModel):
     tenant_id: str = Field(min_length=1)
     raw_text: str = Field(min_length=1)
     source_tag: SourceTag
-    community: str = Field(min_length=1)  # needed by Stage 5 distance lookup
+    community: str = Field(min_length=1)  # for the logistics distance lookup
     original_report_timestamp: datetime
 
     region: Optional[str] = None
@@ -106,7 +114,7 @@ class Report(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Stage 2: Extraction (the only model call)
+# Extraction (the only model call)
 # ---------------------------------------------------------------------------
 
 SpanField = Literal[
@@ -125,6 +133,8 @@ SpanField = Literal[
 
 
 class QuotedSpan(BaseModel):
+    """Words the model says it copied from the report, and the field they back."""
+
     model_config = ConfigDict(extra="forbid")
 
     field: SpanField
@@ -132,10 +142,10 @@ class QuotedSpan(BaseModel):
 
 
 class ExtractedFacts(BaseModel):
-    """Response schema for the LLM and the validation boundary.
+    """One fault's facts as the model read them: one item of ReportExtraction.faults.
 
-    Presence checks only. There is deliberately no numeric field anywhere in
-    this model: nothing that leaves Stage 2 can be a score.
+    Presence checks only. There is deliberately no numeric field: nothing the model
+    returns can be a score. Raises if a claimed fact has no quoted span.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -145,14 +155,14 @@ class ExtractedFacts(BaseModel):
     alternative_mentioned: bool = False
     coping_mentioned: bool = False
     impact_status: Literal["ongoing", "intermittent"] = "ongoing"
-    # §3.2.2 2026-10-04 fields: no defaults, so a response that omits one fails validation
-    # instead of silently reading as "no hazard" / "no harm".
+    # Master §3.2.2 (S2), invariant 4: no defaults, so a response that omits one fails
+    # validation instead of silently reading as "no hazard" / "no harm".
     hazard_status: Literal["none", "described", "unclear"]
     mechanism_type: Optional[Literal["active", "conditional"]] = None
     harm_claimed: bool
     fault_or_sign: Literal["fault", "sign"]
-    # §3.2.2 Field 8 (severity_mismatch in the doc). Renamed: model-facing names must not
-    # invite judging how the tenant writes (CLAUDE.md invariant 3).
+    # Master §3.2.2 (S3): renamed from severity_mismatch. Model-facing names must not invite
+    # judging how the tenant writes (invariant 3).
     claim_mismatch: Optional[Literal["over", "under"]]
     worsening_mentioned: bool
     quoted_spans: list[QuotedSpan] = Field(default_factory=list)
@@ -185,10 +195,10 @@ class ExtractedFacts(BaseModel):
         if missing:
             raise ValueError(f"claimed facts without a quoted span: {missing}")
 
-        # A list match with no fault named is inconsistent extraction: reject so extract() retries.
+        # Master S6: a list match with no fault named is inconsistent, so reject and let extract() retry.
         if self.taxonomy_match and not self.fault_description:
             raise ValueError("fault_description: required when taxonomy_match is non-empty")
-        # Unclear means no pathway was described, so evaluation picks the safety level, not the model.
+        # Unclear means no pathway was described, so evaluation sets the safety level, not the model.
         if self.hazard_status == "described" and self.mechanism_type is None:
             raise ValueError("mechanism_type: required when hazard_status is 'described'")
         if self.hazard_status != "described" and self.mechanism_type is not None:
@@ -217,12 +227,16 @@ class ReportExtraction(BaseModel):
 
 
 class ExtractionStatus(str, Enum):
+    """How extraction ended for one report."""
+
     OK = "ok"
     FLAGGED_FOR_HUMAN = "flagged_for_human"  # failed validation twice
     NO_FAULT_NAMED = "no_fault_named"        # out of scope, coordinator contacts tenant
 
 
 class ExtractionResult(BaseModel):
+    """extract()'s answer for one report, with every failed attempt's error."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     request_id: str
@@ -230,7 +244,7 @@ class ExtractionResult(BaseModel):
     extraction: Optional[ReportExtraction] = None  # None only when FLAGGED_FOR_HUMAN
     attempts: int
     errors: list[str] = Field(default_factory=list)
-    extractor: str  # "llm:<model>" or "offline"
+    extractor: str  # the client's name: "llm:<model>", "recorded:<model>", "recording:llm:<model>" or "offline"
 
 
 class ChildJob(BaseModel):
@@ -246,10 +260,12 @@ class ChildJob(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Stages 3 to 5 output: what Stage 6 consumes (owned by teammates)
+# Verification, evaluation and logistics output: what ranking and explain consume
 # ---------------------------------------------------------------------------
 
 class VerifiedSpan(BaseModel):
+    """A quoted span and whether verification found it in the report."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     field: SpanField
@@ -257,8 +273,47 @@ class VerifiedSpan(BaseModel):
     verified: bool
 
 
+class SecondReading(BaseModel):
+    """What the second reader (Jev) said about one job: coordinator flags only, never a score."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status: Literal["ran", "not run (no key)", "not run (offline)", "not run (recorded mode)", "unavailable"]
+    # No default: "ran" with no flags means agreement, so the flags must always be stated.
+    flags: tuple[Reason, ...]
+    detail: Optional[str]  # the redacted error when unavailable
+
+
+HazardReading = Literal["none", "unclear", "conditional", "active"]
+
+
+class ReRead(BaseModel):
+    """Both extraction readings of one fault's hazard after a second-reader flag."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    read_1: HazardReading
+    # None: the re-read failed validation, or found no fault matching this one.
+    read_2: Optional[HazardReading]
+    # Why read 2 is unavailable; set exactly when read_2 is None.
+    unavailable_reason: Optional[Reason]
+    used: Literal["read 1", "read 2"]
+
+    @model_validator(mode="after")
+    def _reason_iff_unavailable(self) -> "ReRead":
+        if (self.read_2 is None) != (self.unavailable_reason is not None):
+            raise ValueError("unavailable_reason must be set exactly when read_2 is None")
+        if self.read_2 is None and self.used != "read 1":
+            raise ValueError("an unavailable re-read can't be used")
+        return self
+
+
 class EnrichedJob(BaseModel):
-    """Output of Stage 5. Stage 6 reads only three of these fields for order."""
+    """One job after verification, evaluation and logistics: what ranking and explain read.
+
+    Ranking orders on safety_level, urgency_tally, original_report_timestamp and
+    request_id only (via adapter.to_rank_input). Everything else is for the why-trace.
+    """
 
     # frozen: assignment would skip _consistent, so a scored job could lose its tally unchecked.
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -270,8 +325,7 @@ class EnrichedJob(BaseModel):
     community: str
     original_report_timestamp: datetime
     fault_description: Optional[str] = None
-    # Fault-list names matched in Stage 2, for the why-trace. Optional so
-    # Stage 5 output without it still validates; never read by the sort.
+    # Fault-list names matched by extraction, for the why-trace only; never read by the sort.
     taxonomy_match: list[str] = Field(default_factory=list)
 
     # Evaluation output. No defaults: an omission must raise, not read as "no tier" or
@@ -290,12 +344,17 @@ class EnrichedJob(BaseModel):
     flags: tuple[Reason, ...]
     spans: list[VerifiedSpan] = Field(default_factory=list)
 
-    # Stage 5 logistics: display only, never read by the sort
-    distance_cost_km: Optional[float] = None  # road distance from data/distances.json; None if not listed
-    # Straight-line estimate from data/communities.json, labelled as such; never replaces the road figure.
-    distance_estimate_km: Optional[float] = None
-    # Trades the matched fault usually needs (triage/trades.py); empty when untiered.
+    # Logistics: display only, never read by the sort (invariant 5)
+    # Straight-line km to nearest_office, rounded to 5; both None when the community is unknown.
+    distance_cost_km: Optional[float] = None
+    nearest_office: Optional[str] = None
+    # Trades the matched fault usually needs (triage/trades.py); empty when untiered. Display only.
     required_trades: list[str] = Field(default_factory=list)
+    # Coordinator display only, never read by ranking or tenant text. None: no second-reader
+    # step ran for this job (e.g. built outside the demo pipeline).
+    second_reader: Optional[SecondReading] = None
+    # Coordinator display only. None: no re-read was triggered for this job.
+    reread: Optional[ReRead] = None
     capacity_block_flag: bool = False
     next_actionable: Optional[str] = None
     shared_route_opportunities: list[str] = Field(default_factory=list)
@@ -303,6 +362,9 @@ class EnrichedJob(BaseModel):
 
     @model_validator(mode="after")
     def _consistent(self) -> "EnrichedJob":
+        # A km with no office (or the reverse) would render a distance to nowhere.
+        if (self.distance_cost_km is None) != (self.nearest_office is None):
+            raise ValueError("distance_cost_km and nearest_office must both be set or both be None")
         if self.safety_flag != (self.safety_level == "active"):
             raise ValueError(f"safety_flag={self.safety_flag} disagrees with safety_level={self.safety_level!r}")
         if self.urgency_tally is None:

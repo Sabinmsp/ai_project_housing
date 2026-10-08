@@ -7,6 +7,9 @@
     Stage 5  logistics     Report, VerifiedFacts, Evaluation -> EnrichedJob
     Stage 6  ranking       EnrichedJob[] -> Stage6Output (RankResult + ReasoningTrace per job)
 
+Between Stages 2 and 3, build_report_jobs runs the coordinator-only safety checks: the second
+reader (Jev) and, in live mode after a hazard or mechanism flag, one re-read of the report.
+
 Each stage's return type is the next stage's parameter type; tests/test_pipeline.py pins that.
 """
 from __future__ import annotations
@@ -16,19 +19,19 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
 
+from . import reread, second_reader
 from .adapter import to_rank_input
-from .distances import load_coordinates, load_distances, straight_line_km
+from .distances import nearest_office
 from .evaluation import Evaluation, Unverified, evaluate
 from .explain import ReasoningTrace, build_traces
 from .extraction import LLMClient, extract
 from .intake import ReportRepository, new_request_id
-from .models import ChildJob, EnrichedJob, ExtractedFacts, ExtractionResult, RankResult, Report, VerifiedSpan
+from .models import (ChildJob, EnrichedJob, ExtractedFacts, ExtractionResult, RankResult, ReRead, Report,
+                     ReportExtraction, SecondReading, VerifiedSpan)
 from .ranking import rank
 from .trades import required_trades
 from .verification import claim_spans, verify_spans
 
-_DISTANCES = load_distances()
-_COORDS = load_coordinates()
 _SAFETY_LEVEL_NAMES = ("none", "conditional", "active")  # index = Evaluation.safety.level
 
 
@@ -77,7 +80,7 @@ def stage5_enrich(report: Report, verified: VerifiedFacts, evaluation: Evaluatio
                   extra_flags: tuple[str, ...] = ()) -> EnrichedJob:
     """Logistics and the job record Stage 6 reads. Writes fields; reorders nothing."""
     level = _SAFETY_LEVEL_NAMES[evaluation.safety.level]
-    road_km = _DISTANCES.get(report.community)
+    office = nearest_office(report.community)
     return EnrichedJob(
         request_id=job_id, parent_report_id=report.request_id,
         community=report.community,
@@ -85,21 +88,24 @@ def stage5_enrich(report: Report, verified: VerifiedFacts, evaluation: Evaluatio
         original_report_timestamp=report.original_report_timestamp,
         fault_description=verified.facts.fault_description, taxonomy_match=verified.facts.taxonomy_match,
         spans=list(verified.spans),
+        distance_cost_km=None if office is None else office[1],
+        nearest_office=None if office is None else office[0],
         tier=evaluation.tier.tier, tier_entry=evaluation.tally.winner,
         base_points=evaluation.tally.base, severity_bump=evaluation.tally.bump,
         urgency_tally=evaluation.tally.tally, tally_reasons=evaluation.tally.reasons,
         safety_flag=(level == "active"), safety_level=level, safety_reason=evaluation.safety.reason,
         flags=(*evaluation.flags, *extra_flags),
-        distance_cost_km=road_km,
-        # Only when no road distance is listed, and kept in its own field so it is never mistaken for one.
-        distance_estimate_km=None if road_km is not None else straight_line_km("Darwin", report.community, _COORDS),
         required_trades=required_trades(evaluation.tally.winner),
     )
 
 
 def enrich_fault(report: Report, facts: ExtractedFacts, job_id: Optional[str] = None,
                  extra_flags: tuple[str, ...] = ()) -> EnrichedJob:
-    """Stages 3, 4 and 5 for one fault."""
+    """Stages 3, 4 and 5 for one fault.
+
+    Raises:
+        ValueError: the fault has no description (extract() should have routed it out of scope).
+    """
     verified = stage3_verify(report, facts)
     if not facts.fault_description:
         # D4: extract() routes these out of scope, so evaluation must never see one.
@@ -138,6 +144,39 @@ def build_jobs(report: Report, faults: Sequence[ExtractedFacts], ids: Optional[S
             for facts, job_id, dups, extra in zip(faults, ids, duplicate_flags(faults, ids), carried, strict=True)]
 
 
+def build_report_jobs(report: Report, extraction: ReportExtraction, client: LLMClient,
+                      jev: Optional[second_reader.JevClient], jev_not_run: SecondReading,
+                      ) -> tuple[ReportExtraction, list[EnrichedJob]]:
+    """Second reader, re-read safety net, then Stages 3 to 5, for one extracted report.
+
+    Returns the extraction actually scored (a re-read may raise a fault's hazard) and its jobs.
+    Both checks are coordinator-only: they never lower safety and never reorder on their own.
+    """
+    compound = len(extraction.faults) > 1
+    # Per fault; a compound report's fault is named so Jev answers about that one only.
+    readings = [
+        second_reader.read(jev, second_reader.state_for(report.raw_text, f.fault_description, compound), f)
+        if jev else jev_not_run
+        for f in extraction.faults
+    ]
+    # Re-read safety net: a hazard or mechanism flag (live mode only) triggers one more
+    # extraction of the whole report; only the flagged faults use it, and only to raise safety.
+    records: list[tuple[ReRead, tuple[str, ...]] | None] = [None] * len(readings)
+    triggered = [i for i, r in enumerate(readings) if reread.should_reread(client.name, r)]
+    if triggered:
+        again = extract(report, client)
+        faults = list(extraction.faults)
+        for i in triggered:
+            faults[i], record, flags = reread.combine(faults[i], again, single=len(faults) == 1)
+            records[i] = (record, flags)
+        extraction = ReportExtraction(faults=tuple(faults))
+    jobs = []
+    for job, r, rec in zip(build_jobs(report, extraction.faults), readings, records, strict=True):
+        job = second_reader.attach(job, r)
+        jobs.append(job if rec is None else reread.attach(job, *rec))
+    return extraction, jobs
+
+
 def save_children(repo: ReportRepository, faults: Sequence[ExtractedFacts], jobs: Sequence[EnrichedJob]) -> None:
     """Store a compound report's child jobs, so a tenant replying with a child's id can escalate it."""
     if len(jobs) == 1:
@@ -149,7 +188,7 @@ def save_children(repo: ReportRepository, faults: Sequence[ExtractedFacts], jobs
 
 # ---- Stage 6 ----------------------------------------------------------------
 
-def stage6_rank(jobs: Sequence[EnrichedJob]) -> Stage6Output:
+def stage6_rank(jobs: Sequence[EnrichedJob], asked_why: frozenset[str] = frozenset()) -> Stage6Output:
     by_id = {job.request_id: job for job in jobs}
     result = rank([to_rank_input(job) for job in jobs])
-    return Stage6Output(result=result, traces=tuple(build_traces(result, by_id)))
+    return Stage6Output(result=result, traces=tuple(build_traces(result, by_id, asked_why)))

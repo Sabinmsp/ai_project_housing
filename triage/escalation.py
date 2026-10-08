@@ -1,10 +1,11 @@
-"""Escalation loop: a tenant re-contacts about an existing request.
+"""Escalation: a tenant re-contacts about an existing request.
 
-Matched by exact request_id (never fuzzy), the follow-up is appended in
-Stage 1, and the whole history re-enters Stage 2 for a fresh read. Stages
-3 to 6 then run as normal, so the tally can change, but
-original_report_timestamp is untouched: escalation never resets queue
-fairness.
+Input: a request or child job ID and the follow-up text. Output: the updated Report and
+a fresh ExtractionResult. Matched by exact request_id (never fuzzy), the follow-up is
+appended at intake, and the whole history re-enters extraction for a fresh read. The
+later stages then run as normal, so the tally can change, but
+original_report_timestamp is untouched: escalation never resets queue fairness
+(invariant 6).
 
 A compound report's child job id resolves to its parent report. The parent is
 re-read and only the escalated child is updated, matched by taxonomy entry
@@ -28,7 +29,8 @@ def rematch_child(child: ChildJob, siblings: Sequence[ChildJob], result: Extract
     siblings is every child of the parent, including this one. The child takes the
     re-extracted fault only when the fault count is unchanged and exactly one fault shares
     one of its (non-empty) taxonomy entries. Otherwise it keeps its facts and is flagged.
-    Existing flags are always carried forward.
+    Existing flags are always carried forward. Rebuilt through model_validate, never
+    model_copy, so the result is validated.
     """
     faults = result.extraction.faults if result.status is ExtractionStatus.OK and result.extraction else ()
     flags = list(child.flags)
@@ -55,8 +57,10 @@ def escalate(repo: ReportRepository, request_id: str, text: str,
     """Append the follow-up and re-extract the report.
 
     request_id is a report id or a compound report's child job id; a child id re-reads its
-    parent and updates only that child in the repository. Raises
-    intake.UnknownRequestError if request_id does not match exactly.
+    parent and updates only that child in the repository.
+
+    Raises:
+        intake.UnknownRequestError: request_id does not match a report or child exactly.
     """
     child = repo.get_child(request_id)
     if child is None:

@@ -25,14 +25,15 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from triage.adapter import to_rank_input
-from triage.distances import load_coordinates, straight_line_km
+from triage import second_reader
+from triage.distances import community_names, km_between
 from triage.escalation import escalate
-from triage.evaluation import ALTERNATIVE, compute_tally, lookup_tier
-from triage.explain import ReasoningTrace, render_tenant_sms
+from triage.evaluation import compute_tally, lookup_tier
+from triage.explain import ReasoningTrace, tenant_sms, tenant_why
 from triage.extraction import OfflineExtractor, OpenAICompatibleClient, configured_model
 from triage.intake import DuplicateRequestError, SQLiteReportRepository, UnknownRequestError, create_report
 from triage.models import EnrichedJob, ExtractedFacts, ExtractionResult, ExtractionStatus, Report, SourceTag
-from triage.pipeline import build_jobs, enrich_fault, save_children, stage2_extract, stage6_rank
+from triage.pipeline import build_jobs, build_report_jobs, enrich_fault, save_children, stage2_extract, stage6_rank
 from triage.recording import RECORDED_DIR, RecordedClient, RecordingClient, RecordingMissing
 from triage.report_files import load_reports
 from triage.tiers import FAULT_NAMES, TIER_TABLE
@@ -43,7 +44,6 @@ ROOT = Path(__file__).resolve().parent.parent
 STATIC = Path(__file__).resolve().parent / "static"
 NT_TIME = timezone(timedelta(hours=9, minutes=30))
 DB_PATH = os.environ.get("FAIRFIX_DB", str(ROOT / "data" / "fairfix.db"))
-COORDS = load_coordinates()
 
 SOURCE_LABELS = {"nt.gov.au": "NT Government repairs guidance (nt.gov.au)"}
 
@@ -283,12 +283,24 @@ class Workspace:
         if children:  # a compound report: keep its job ids and any escalation flags
             faults = [c.facts for c in children]
             jobs = build_jobs(report, faults, [c.job_id for c in children], [c.flags for c in children])
-        else:
+        elif existing:  # restart: rebuild from the saved reading, never call the second reader again
             faults = list(result.extraction.faults)
             jobs = build_jobs(report, faults)
+        else:
+            jev, jev_not_run = self.jev_reader()
+            extraction, jobs = build_report_jobs(report, result.extraction, self.client, jev, jev_not_run)
+            faults = list(extraction.faults)
             save_children(self.repo, faults, jobs)
         for job, facts in zip(jobs, faults, strict=True):
             self.store_job(job, facts)
+
+    def jev_reader(self) -> tuple[Optional[second_reader.JevClient], second_reader.SecondReading]:
+        """The second reader (Jev) runs only with live extraction and its own key, as in demo.py."""
+        if isinstance(self.client, OfflineExtractor):
+            return None, second_reader.not_run("not run (offline)")
+        if getattr(self.client, "live", None) is None:
+            return None, second_reader.not_run("not run (recorded mode)")
+        return second_reader.client_from_env(), second_reader.not_run("not run (no key)")
 
     def store_job(self, job: EnrichedJob, facts: ExtractedFacts) -> None:
         self.facts[job.request_id] = facts
@@ -340,10 +352,8 @@ def ws() -> Workspace:
 # ---------------------------------------------------------------------------
 
 def distance_of(job: EnrichedJob) -> dict:
-    """Stage 5's distance: the road figure if listed, otherwise its labelled straight-line estimate."""
-    if job.distance_cost_km is not None:
-        return {"km": job.distance_cost_km, "approx": False}
-    return {"km": job.distance_estimate_km, "approx": job.distance_estimate_km is not None}
+    """Stage 5's straight-line km to the nearest housing office; both None if the community is unlisted."""
+    return {"km": job.distance_cost_km, "office": job.nearest_office}
 
 
 def days_waiting(job: EnrichedJob) -> int:
@@ -376,7 +386,7 @@ def recommend_tradies(w: Workspace, job: EnrichedJob, choice: Optional[str] = No
                     if s.get("tradie_id") == t["id"] and s["status"] == "Assigned" and k in w.jobs]
         same_trip = [k for k in assigned if k != job.request_id and w.jobs[k].community == job.community]
         qualified = not needed or bool(set(needed) & set(t["trades"]))
-        km = straight_line_km(t["base"], job.community, COORDS)
+        km = km_between(t["base"], job.community)
         reasons = [("Qualified: " + ", ".join(sorted(set(needed) & set(t["trades"])))) if needed and qualified
                    else ("Trade not confirmed yet" if not needed else "Not listed for " + " or ".join(needed)),
                    "Available" if t["available"] else "Unavailable",
@@ -432,36 +442,6 @@ def job_summary(w: Workspace, job: EnrichedJob, trace: Optional[ReasoningTrace] 
     }
 
 
-def tenant_why(trace: ReasoningTrace) -> str:
-    """Plain-language answer to "why is my repair where it is?". Template only: every
-    sentence is fixed text or a trace value, so it cannot invent a reason, and it never
-    mentions other tenants, positions or distance."""
-    lines = [f"Repair {trace.job_id}:"]
-    hazard = next((s.text for s in trace.evidence_spans if s.field == "hazard"), None)
-    if trace.safety_level == 2:
-        lines.append(f'Your report describes a safety risk ("{hazard}"). Safety jobs are always done first.')
-    elif trace.safety_level == 1:
-        lines.append(f'Your report mentions a possible safety risk ("{hazard}"), so it is placed above jobs with no safety risk.'
-                     if hazard else "Your report mentions a possible safety risk, so it is placed above jobs with no safety risk.")
-    if trace.tier is None:
-        lines.append("This fault is not on the standard repairs list, so a coordinator is confirming how urgent it is.")
-    else:
-        sources = "; ".join(_source_label(s) for s in TIER_TABLE[trace.tier_entry].sources)
-        kind = "an emergency repair" if trace.tier == "dangerous" else "a general repair"
-        lines.append(f'"{trace.tier_entry}" is listed as {kind} ({sources}).')
-        if ALTERNATIVE in trace.tally_reasons:
-            alt = next((s.text for s in trace.evidence_spans if s.field == "alternative_mentioned"), None)
-            quoted = f' ("{alt}")' if alt else ""
-            lines.append(f"You mentioned another working one{quoted}, so homes with none working are fixed first.")
-        elif trace.severity_bump == 1:
-            lines.append("No other working one was mentioned, so it gets the extra urgency point.")
-    lines.append(f"Jobs with the same priority are done in the order they were reported. "
-                 f"Your report date: {trace.original_timestamp.astimezone(NT_TIME):%d %b %Y}.")
-    lines.append("Your location and travel distance are not used to set your place in the queue.")
-    lines.append(f"Reply with {trace.job_id} if things get worse.")
-    return " ".join(lines)
-
-
 def trace_rows(trace: ReasoningTrace) -> list[dict]:
     rows: list[dict] = []
     if trace.tier is None:
@@ -478,6 +458,11 @@ def trace_rows(trace: ReasoningTrace) -> list[dict]:
     rows += [
         {"label": "Safety level", "value": f"{trace.safety_level} ({SAFETY_NAMES[trace.safety_level]})", "note": trace.safety_reason},
         {"label": "Required trade", "value": ", ".join(trace.required_trades) or "not confirmed", "note": "Stage 5, display only"},
+        {"label": "Distance", "value": f"{trace.distance_km:g} km" if trace.distance_km is not None else "unknown",
+         "note": f"straight line to {trace.nearest_office}, not in sort key" if trace.nearest_office else "community not in the table, not in sort key"},
+        *([{"label": "Second reader", "value": trace.second_reader.status,
+            "note": "; ".join(trace.second_reader.flags) or "no disagreement"}] if trace.second_reader else []),
+        *([{"label": "Re-read", "value": "yes", "note": "safety re-read after a second-reader flag"}] if trace.reread else []),
         {"label": "Reported", "value": f"{trace.original_timestamp.astimezone(NT_TIME):%d %b %Y, %H:%M}", "note": "first-come order input, never overwritten"},
         {"label": "Position", "value": f"{trace.position} of {trace.queue_length}", "note": trace.decided_by},
     ]
@@ -509,15 +494,6 @@ def _plain_failure(errors: list[str]) -> str:
     return "The model could not be reached (twice), so a person needs to read this report."
 
 
-def _sms_and_why(job_id: str, trace: Optional[ReasoningTrace]) -> tuple[str, str]:
-    if trace:
-        return render_tenant_sms(trace), tenant_why(trace)
-    return (f"Housing repair {job_id}: we have your report. A coordinator is confirming its priority. "
-            f"Reply with {job_id} if things get worse.",
-            f"Repair {job_id}: this fault is not on the standard repairs list, so a coordinator is checking it before "
-            "it is placed in the queue. Your location and travel distance are not used to set your place in the queue.")
-
-
 PRIVACY_NOTE = {
     "form": "Name, phone, email, address and the tenant's own Immediate/Urgent/Routine rating were kept out of the text sent to the model.",
     "text": "Only the message text is sent to the model. A tenant reference is stored as a one-way code, never as entered.",
@@ -533,7 +509,7 @@ def stage_view(w: Workspace, report_id: str) -> dict:
     out_jobs = []
     for job in jobs:
         trace = by_id.get(job.request_id)
-        sms, why = _sms_and_why(job.request_id, trace)
+        sms, why = tenant_sms(job), tenant_why(job)
         tier_sources = "; ".join(_source_label(s) for s in TIER_TABLE[job.tier_entry].sources) if job.tier_entry else None
         top = next((r for r in recommend_tradies(w, job) if r["recommended"]), None)
         out_jobs.append({
@@ -561,6 +537,7 @@ def stage_view(w: Workspace, report_id: str) -> dict:
         "stage2": {"status": result.status.value, "extractor": result.extractor, "attempts": result.attempts,
                    "problem": None if result.status is ExtractionStatus.OK else
                    ("No fault named: contact the tenant" if result.status is ExtractionStatus.NO_FAULT_NAMED else _plain_failure(result.errors)),
+                   "sms": None if result.status is ExtractionStatus.OK else tenant_sms(result),
                    "faults": [{"fault_description": f.fault_description, "facts": facts_view(f)}
                               for f in (result.extraction.faults if result.extraction else [])]},
         "jobs": out_jobs,
@@ -629,7 +606,7 @@ async def reference(request: Request) -> dict:
     require(request)
     with _lock:
         w = ws()
-        communities = sorted(set(COORDS) | {j.community for j in w.jobs.values()})
+        communities = sorted(set(community_names()) | {j.community for j in w.jobs.values()})
         return {"communities": communities, "fault_names": list(FAULT_NAMES), "mode": w.client.describe(),
                 "trades": list(ALL_TRADES)}
 
@@ -679,7 +656,7 @@ async def job_detail(job_id: str, request: Request, trade: Optional[str] = None)
         same_community = [j for k, j in w.open_jobs().items() if j.community == job.community]
         others = [j.request_id for j in same_community if j.request_id != job_id]
         oldest = max((days_waiting(j) for j in same_community), default=0)
-        sms, why = _sms_and_why(job_id, trace)
+        sms, why = tenant_sms(job), tenant_why(job)
         return {
             **job_summary(w, job, trace),
             "raw_text": report.raw_text,

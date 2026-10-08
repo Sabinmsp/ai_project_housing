@@ -11,6 +11,8 @@ settings.register_profile("triage", suppress_health_check=[HealthCheck.too_slow]
 settings.load_profile("triage")
 
 
+import urllib.request
+
 import openai
 import pytest
 
@@ -21,7 +23,7 @@ import demo
 def no_real_api(monkeypatch: pytest.MonkeyPatch) -> None:
     """No test reads .env or builds the real API client; a test that needs "live" swaps in a fake."""
     monkeypatch.setattr(demo, "_load_dotenv", lambda *args, **kwargs: None)
-    for name in ("OPENAI_API_KEY", "TRIAGE_API_KEY"):
+    for name in ("OPENAI_API_KEY", "TRIAGE_API_KEY", "TYPESAFE_API_KEY"):
         monkeypatch.setenv(name, "")
     # A developer's shell settings must not change the recording hash or the client a test sees.
     for name in ("TRIAGE_MODEL", "TRIAGE_BASE_URL"):
@@ -31,3 +33,13 @@ def no_real_api(monkeypatch: pytest.MonkeyPatch) -> None:
         raise AssertionError("real API client constructed in a test")
     # The SDK constructor itself: every path to a paid call (demo, extraction, probe script) goes through it.
     monkeypatch.setattr(openai, "OpenAI", refuse)
+    # The second reader's only network call goes through urlopen; no test may reach Jev.
+    # BaseException: the second reader turns any Exception into "unavailable", which would
+    # hide a real call behind a passing test.
+    def refuse_network(*args: object, **kwargs: object) -> None:
+        raise NetworkCallInTest("real network call in a test")
+    monkeypatch.setattr(urllib.request, "urlopen", refuse_network)
+
+
+class NetworkCallInTest(BaseException):
+    """Raised by the autouse guard; not an Exception, so no handler can swallow it."""

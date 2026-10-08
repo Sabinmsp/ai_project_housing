@@ -3,7 +3,10 @@
     "base_points": 3,
     "capacity_block_flag": false,
     "community": "Darwin",
-    "distance_cost_km": 0.0,
+    "distance_cost_km": 10.0,
+    "nearest_office": "Casuarina office",
+    "second_reader": null,
+    "reread": null,
     "fault_description": "toilet blocked",
     "flags": [],
     "next_actionable": null,
@@ -42,14 +45,16 @@
     "urgency_tally": 3,
     "required_trades": [
       "Plumber"
-    ],
-    "distance_estimate_km": null
+    ]
   },
   "T-02_wadeye.pdf": {
     "base_points": 3,
     "capacity_block_flag": false,
     "community": "Wadeye",
-    "distance_cost_km": 412.0,
+    "distance_cost_km": 250.0,
+    "nearest_office": "Palmerston office",
+    "second_reader": null,
+    "reread": null,
     "fault_description": "toilet blocked",
     "flags": [],
     "next_actionable": null,
@@ -88,14 +93,16 @@
     "urgency_tally": 4,
     "required_trades": [
       "Plumber"
-    ],
-    "distance_estimate_km": null
+    ]
   },
   "T-03_maningrida.pdf": {
     "base_points": 3,
     "capacity_block_flag": false,
     "community": "Maningrida",
-    "distance_cost_km": 510.0,
+    "distance_cost_km": 280.0,
+    "nearest_office": "Nhulunbuy office",
+    "second_reader": null,
+    "reread": null,
     "fault_description": "roof leaking",
     "flags": [],
     "next_actionable": null,
@@ -134,14 +141,16 @@
     "urgency_tally": 4,
     "required_trades": [
       "Roofer"
-    ],
-    "distance_estimate_km": null
+    ]
   },
   "T-04_galiwinku.pdf": {
     "base_points": 3,
     "capacity_block_flag": false,
     "community": "Galiwinku",
-    "distance_cost_km": 560.0,
+    "distance_cost_km": 135.0,
+    "nearest_office": "Nhulunbuy office",
+    "second_reader": null,
+    "reread": null,
     "fault_description": "no hot water",
     "flags": [],
     "next_actionable": null,
@@ -175,14 +184,16 @@
     "urgency_tally": 4,
     "required_trades": [
       "Plumber"
-    ],
-    "distance_estimate_km": null
+    ]
   },
   "T-05_wadeye.pdf": {
     "base_points": null,
     "capacity_block_flag": false,
     "community": "Wadeye",
-    "distance_cost_km": 412.0,
+    "distance_cost_km": 250.0,
+    "nearest_office": "Palmerston office",
+    "second_reader": null,
+    "reread": null,
     "fault_description": "the ceiling fan wobbles and makes a noise",
     "flags": [],
     "next_actionable": null,
@@ -205,14 +216,16 @@
     "tier": null,
     "tier_entry": null,
     "urgency_tally": null,
-    "required_trades": [],
-    "distance_estimate_km": null
+    "required_trades": []
   },
   "T-06_darwin.pdf": {
     "base_points": 3,
     "capacity_block_flag": false,
     "community": "Darwin",
-    "distance_cost_km": 0.0,
+    "distance_cost_km": 10.0,
+    "nearest_office": "Casuarina office",
+    "second_reader": null,
+    "reread": null,
     "fault_description": "toilet blocked",
     "flags": [],
     "next_actionable": null,
@@ -246,7 +259,6 @@
     "urgency_tally": 4,
     "required_trades": [
       "Plumber"
-    ],
-    "distance_estimate_km": null
+    ]
   }
 }

@@ -1,5 +1,8 @@
-"""Stage "verification": check that every quoted span is the report's own words.
+"""Verification: check that every quoted span is the tenant's own words.
 
+Pipeline: intake -> extraction -> verification -> evaluation -> ranking -> explain.
+Input: the report's raw text and one fault's ExtractedFacts. Output: the (field, quote)
+pairs not found in the report, which evaluation must never let lower a score.
 Pure functions, no I/O, no model.
 """
 

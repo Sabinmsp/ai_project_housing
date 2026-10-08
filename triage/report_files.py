@@ -1,6 +1,8 @@
-"""Stage 1 input: read tenant reports from files in a folder.
+"""Intake input: read tenant reports from files in a folder.
 
-Each file is one report. PDF (.pdf) and plain text (.txt) use the same layout:
+Input: a folder of .pdf and .txt files. Output: Reports for intake to store, plus the
+files skipped and why. Each file is one report (a GEH form gives one per issue; see
+geh_form.py). PDF and plain text use the same layout:
 
     Tenant ID: T-03
     Community: Maningrida
@@ -52,10 +54,11 @@ _DATE_FORMATS = ("%d/%m/%Y %H:%M", "%d/%m/%Y %I:%M %p", "%d/%m/%Y %I:%M%p")
 
 
 class ReportFileError(ValueError):
-    pass
+    """A report file is missing a required field or has one in an unreadable form."""
 
 
 def read_text(path: Path) -> str:
+    """The file's text: every PDF page joined, or the UTF-8 text file as is."""
     if path.suffix.lower() == ".pdf":
         from pypdf import PdfReader
 

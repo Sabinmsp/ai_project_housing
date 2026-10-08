@@ -1,0 +1,79 @@
+[
+  {
+    "name": "Arnhem",
+    "region": "Arnhem",
+    "town": "Nhulunbuy",
+    "address": "Nhulunbuy Regional Office, 57 Chesterfield Circuit, Nhulunbuy NT 0880",
+    "lat": -12.1825,
+    "lon": 136.78194444,
+    "coord_level": "town",
+    "source_url": "https://en.wikipedia.org/wiki/Nhulunbuy",
+    "office_list_source": "https://nt.gov.au/property/social-housing/contacts-and-support-services/contact-your-local-housing-office"
+  },
+  {
+    "name": "Barkly",
+    "region": "Barkly",
+    "town": "Tennant Creek",
+    "address": "Ground Floor, Matt Glynn Building, 172 Patterson Street, Tennant Creek NT 0860",
+    "lat": -19.64722222,
+    "lon": 134.19027778,
+    "coord_level": "town",
+    "source_url": "https://en.wikipedia.org/wiki/Tennant_Creek",
+    "office_list_source": "https://nt.gov.au/property/social-housing/contacts-and-support-services/contact-your-local-housing-office"
+  },
+  {
+    "name": "Big Rivers",
+    "region": "Big Rivers",
+    "town": "Katherine",
+    "address": "Ground floor, NT Government Centre, 5 First Street, Katherine NT 0850",
+    "lat": -14.46138889,
+    "lon": 132.26611111,
+    "coord_level": "town",
+    "source_url": "https://en.wikipedia.org/wiki/Katherine,_Northern_Territory",
+    "office_list_source": "https://nt.gov.au/property/social-housing/contacts-and-support-services/contact-your-local-housing-office"
+  },
+  {
+    "name": "Central Australia",
+    "region": "Central Australia",
+    "town": "Alice Springs",
+    "address": "Mwerre House, 60-64 Hartley Street, Alice Springs 0870",
+    "lat": -23.7,
+    "lon": 133.87,
+    "coord_level": "town",
+    "source_url": "https://en.wikipedia.org/wiki/Alice_Springs",
+    "office_list_source": "https://nt.gov.au/property/social-housing/contacts-and-support-services/contact-your-local-housing-office"
+  },
+  {
+    "name": "Greater Darwin",
+    "region": "Greater Darwin",
+    "town": "Casuarina",
+    "address": "Ground floor, CasCom Centre, Building 5, 13-17 Scaturchio Street, Casuarina 0810",
+    "lat": -12.37333333,
+    "lon": 130.88166667,
+    "coord_level": "town",
+    "source_url": "https://en.wikipedia.org/wiki/Casuarina,_Northern_Territory",
+    "office_list_source": "https://nt.gov.au/property/social-housing/contacts-and-support-services/contact-your-local-housing-office"
+  },
+  {
+    "name": "Palmerston",
+    "region": "Palmerston",
+    "town": "Palmerston",
+    "address": "Highway House, Unit 5, 14 Palmerston Cct, Palmerston City NT 0830",
+    "lat": -12.48055556,
+    "lon": 130.98305556,
+    "coord_level": "town",
+    "source_url": "https://en.wikipedia.org/wiki/Palmerston,_Northern_Territory",
+    "office_list_source": "https://nt.gov.au/property/social-housing/contacts-and-support-services/contact-your-local-housing-office"
+  },
+  {
+    "name": "Top End",
+    "region": "Top End",
+    "town": "Casuarina",
+    "address": "Level 1, CasCom Centre, Building 4, 13-17 Scaturchio Street, Casuarina 0810",
+    "lat": -12.37333333,
+    "lon": 130.88166667,
+    "coord_level": "town",
+    "source_url": "https://en.wikipedia.org/wiki/Casuarina,_Northern_Territory",
+    "office_list_source": "https://nt.gov.au/property/social-housing/contacts-and-support-services/contact-your-local-housing-office"
+  }
+]

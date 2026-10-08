@@ -1,6 +1,0 @@
-{
-  "model": "nvidia/nemotron-3-super-120b-a12b:free",
-  "recorded_at": "2026-10-08",
-  "prompt_hash": "76a502ba433b216369123a79bde01e651a444971e72e7b5eb0052f5a96b3b829",
-  "response": "{\"faults\": []}"
-}

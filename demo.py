@@ -1,34 +1,48 @@
-"""Command-line run of all six stages (triage/pipeline.py), the same code the web app uses.
+"""Run the whole pipeline on a folder of reports and print each stage.
 
-Reports are read from the reports/ folder (one .pdf or .txt per report; see
-triage/report_files.py for the layout). Run: python demo.py [folder]
+Pipeline: intake -> extraction -> verification -> evaluation -> ranking -> explain.
+Input: a folder of .pdf/.txt reports (default reports/; layout in triage/report_files.py).
+Output: the ranked queue, review band, coordinator why-traces and tenant SMS on stdout.
+Stages 3 to 5 and the safety checks run through triage/pipeline.py, the same code the web
+app (app/server.py) uses.
+
+Run: python demo.py [folder] [--offline | --record]
 """
 import argparse
 import os
 import sys
 from pathlib import Path
 
+from triage.adapter import to_rank_input
+from triage.explain import (
+    UNKNOWN_REF_REPLY,
+    build_traces,
+    render_coordinator,
+    render_review_entry,
+    tenant_sms,
+    tenant_sms_report,
+    tenant_why,
+)
 from triage.extraction import LLMClient, OfflineExtractor, OpenAICompatibleClient, extract
 from triage.intake import DuplicateRequestError, SQLiteReportRepository
 from triage.models import EnrichedJob, ExtractionStatus, Report, ReportExtraction
-from triage.adapter import to_rank_input
-from triage.recording import RECORDED_DIR, RecordedClient, RecordingClient
-from triage.verification import claim_spans
-from triage.pipeline import build_jobs, duplicate_flags, enrich_fault, save_children
-from triage.explain import build_traces, render_coordinator, render_review_entry, render_tenant_sms
+from triage.pipeline import build_jobs, build_report_jobs, duplicate_flags, enrich_fault, save_children
 from triage.ranking import rank
+from triage.recording import RECORDED_DIR, RecordedClient, RecordingClient
 from triage.report_files import load_reports
+from triage import second_reader
+from triage.verification import claim_spans
 
 REPORTS_DIR = Path(__file__).with_name("reports")
 
-# ---- Stages 3 to 5 live in triage/pipeline.py, shared with the web app (app/server.py) ----
+# ---- Stages 3 to 5 and the safety checks live in triage/pipeline.py, shared with the web app.
 # These names are kept so existing callers and tests keep working.
-_standin_stages_3_to_5 = enrich_fault
+_build_job = enrich_fault
 _duplicate_flags = duplicate_flags
 
 
-def _standin_jobs(report: Report, extraction: ReportExtraction) -> list[EnrichedJob]:
-    """One job per fault, none dropped or merged. [] never gets here: extract() routes it out of scope."""
+def _build_jobs(report: Report, extraction: ReportExtraction) -> list[EnrichedJob]:
+    """One job per fault, none dropped or merged. An empty faults list never gets here."""
     return build_jobs(report, extraction.faults)
 
 
@@ -76,14 +90,17 @@ def _load_dotenv(path: Path = Path(__file__).with_name(".env")) -> None:
 
 
 def _heading(title: str) -> None:
+    """Print a stage banner."""
     print(f"\n{'=' * 78}\n{title}\n{'=' * 78}")
 
 
 def _one_line(text: str) -> str:
+    """Show follow-up lines on one line, separated by " | "."""
     return text.replace("\n", " | ")
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Parse arguments, pick the extraction client, and run every stage on the folder."""
     parser = argparse.ArgumentParser(description="Run the triage pipeline on a folder of reports.")
     parser.add_argument("folder", nargs="?", type=Path, default=REPORTS_DIR)
     modes = parser.add_mutually_exclusive_group()
@@ -91,21 +108,29 @@ def main(argv: list[str] | None = None) -> None:
                        help="regex test double; never builds the API client (CI, local gate)")
     modes.add_argument("--record", action="store_true",
                        help=f"live run that also saves every response to {RECORDED_DIR.name}/ (needs a key)")
+    parser.add_argument("--why", metavar="REF", help="print the tenant's answer to 'WHY REF' for that job")
     args = parser.parse_args(argv)
     folder = args.folder
     if not folder.is_dir():
         sys.exit(f"Report folder not found: {folder}")
     repo = SQLiteReportRepository()
     client = _choose_client(args.offline, args.record)
+    # Second reader (Jev): never under --offline; recorded mode makes no paid calls either.
+    recorded = client.name.startswith("recorded:")
+    jev = None if args.offline or recorded else second_reader.client_from_env()
+    jev_not_run = second_reader.not_run(
+        "not run (offline)" if args.offline else "not run (recorded mode)" if recorded else "not run (no key)"
+    )
+    print(f"SECOND READER: {'Jev ' + second_reader.JEV_MODEL + ' (paid API calls)' if jev else jev_not_run.status}")
 
-    # ---- STAGE 1: intake ---------------------------------------------------
+    # ---- intake --------------------------------------------------------------
     reports, skipped = load_reports(folder)
     for report in reports:
         try:
             repo.save(report)
         except DuplicateRequestError:
             skipped.append((Path(report.request_id), "duplicate request_id"))
-    _heading(f"STAGE 1 - INTAKE (code)   {len(reports)} reports from {folder}/")
+    _heading(f"INTAKE (code)   {len(reports)} reports from {folder}/")
     for path, why in skipped:
         print(f"  skipped {path.name}: {why}")
     if not reports:
@@ -127,14 +152,17 @@ def main(argv: list[str] | None = None) -> None:
               + (f"  ({r.timestamp_source})" if r.timestamp_source else ""))
         print(f"  raw_text: {_one_line(r.raw_text)!r}")
 
-    # ---- STAGE 2: extraction (the only model call) -------------------------
-    _heading(f"STAGE 2 - EXTRACTION (model reads only)   extractor: {client.name}")
+    # ---- extraction (the only model call) ------------------------------------
+    _heading(f"EXTRACTION (model reads only)   extractor: {client.name}")
     extracted = []
+    not_extracted = {}  # flagged for human / out of scope: no job, but the tenant can still ask WHY
     for report in repo.all():
         res = extract(report, client)
         print(f"\n{report.request_id}  status={res.status.value}  attempts={res.attempts}")
         if res.extraction is None:
             print(f"  -> coordinator follow-up: {res.errors}")
+            print("  SMS:", tenant_sms(res))
+            not_extracted[res.request_id] = res
             continue
         for f in res.extraction.faults:
             print(f"  fault_description: {f.fault_description!r}")
@@ -150,29 +178,45 @@ def main(argv: list[str] | None = None) -> None:
             extracted.append((report, res.extraction))
         else:
             print("  -> no fault named: out of scope, coordinator contacts tenant")
+            print("  SMS:", tenant_sms(res))
+            not_extracted[res.request_id] = res
 
-    # ---- STAGES 3-5: verification, evaluation, logistics (triage/pipeline.py) ----
+    # ---- verification, evaluation, logistics stand-in -------------------------
     jobs = []
     for report, extraction in extracted:
-        report_jobs = _standin_jobs(report, extraction)
+        extraction, report_jobs = build_report_jobs(report, extraction, client, jev, jev_not_run)
         _save_children(repo, extraction, report_jobs)
         jobs.extend(report_jobs)
-    _heading("STAGES 3-5 - verification, evaluation, logistics (triage/pipeline.py)")
+    _heading("VERIFICATION + EVALUATION (code)   distance: straight-line to nearest housing office")
+    for report, _ in extracted:
+        children = [j for j in jobs if j.parent_report_id == report.request_id]
+        if len(children) > 1:
+            print(f"\n{report.request_id}  compound report SMS:", tenant_sms_report(children))
 
-    # ---- STAGE 6: ranking + why-trace -------------------------------------
+    # ---- ranking + explain (why-trace) ---------------------------------------
     by_id = {job.request_id: job for job in jobs}
     result = rank([to_rank_input(job) for job in jobs])
-    _heading("STAGE 6 - RANKING + WHY-TRACE (code)")
+    _heading("RANKING + WHY-TRACE (code)")
     print("\nREVIEW BAND (held above and outside the sort)")
     for job_id in result.review_band:
         print(f"\n{job_id}{origin(job_id)}")
-        print(render_review_entry(by_id[job_id]))
+        print(render_review_entry(by_id[job_id], asked_why=job_id == args.why))
+        print("SMS:", tenant_sms(by_id[job_id]))
 
     print("\nRANKED QUEUE  sort_key = (-safety_level, tally-less first, -tally, original_timestamp, job_id)")
-    for tr in build_traces(result, by_id):
+    for tr in build_traces(result, by_id, frozenset({args.why} if args.why else ())):
         print(f"\n#{tr.position}{origin(tr.job_id)}")
         print(render_coordinator(tr))
-        print("SMS:", render_tenant_sms(tr))
+        print("SMS:", tenant_sms(by_id[tr.job_id]))
+
+    if args.why:
+        _heading(f"TENANT ASKED: WHY {args.why}")
+        if args.why in by_id:
+            print(tenant_why(by_id[args.why]))
+        elif args.why in not_extracted:
+            print(tenant_why(not_extracted[args.why]))
+        else:
+            print(UNKNOWN_REF_REPLY)
 
 
 if __name__ == "__main__":

@@ -122,7 +122,9 @@ const statusBadge = j => j.status === 'Assigned' ? `<span class="badge b-accent"
 
 const safetyText = j => ['No safety risk', 'Possible safety risk', 'Active safety risk'][j.safety_level];
 const waiting = d => `${d} day${d === 1 ? '' : 's'}`;
-const dist = d => !d || d.km == null ? '<span class="text-slate-400">unknown</span>' : `${d.approx ? '≈' : ''}${Math.round(d.km)} km`;
+// Stage 5: straight-line km to the nearest NT housing office (display only, never ordering).
+const dist = d => !d || d.km == null ? '<span class="text-slate-400">unknown</span>'
+  : `<span title="Straight line to the ${esc(d.office)}">${Math.round(d.km)} km</span>`;
 const source = j => j.source_tag === 'officer' ? 'Officer (phone call)' : 'Tenant (form or message)';
 const ref = (id, link = true) => link ? `<a href="#/job/${esc(id)}" class="whitespace-nowrap font-medium text-teal-700 hover:underline">${esc(id)}</a>` : `<span class="whitespace-nowrap font-medium">${esc(id)}</span>`;
 
@@ -346,7 +348,7 @@ async function renderCommunities() {
   setHead('Communities', 'Who is waiting where. Use this to plan trips, not to reorder the queue.');
   const f = await api('/api/fairness');
   page().innerHTML = card('', tableWrap(
-    '<th>Community</th><th>Distance from Darwin</th><th class="text-right">Open jobs</th><th class="text-right">Safety jobs</th><th class="text-right">In review</th><th>Oldest waiting</th>',
+    '<th>Community</th><th>To nearest office</th><th class="text-right">Open jobs</th><th class="text-right">Safety jobs</th><th class="text-right">In review</th><th>Oldest waiting</th>',
     f.communities.map(c => `<tr><td class="font-medium">${esc(c.community)}</td><td class="text-slate-500">${dist(c.distance)}</td>
       <td class="text-right tabular-nums">${c.open}</td><td class="text-right">${c.safety ? `<span class="badge b-critical">${c.safety}</span>` : '<span class="text-slate-400">0</span>'}</td>
       <td class="text-right tabular-nums">${c.review_band}</td>
@@ -368,7 +370,7 @@ async function renderFairness() {
       ${stat('Worst case', s.worst ? `#${s.worst.position} → #${s.worst.nearest_first_position}` : '—', s.worst ? `${esc(s.worst.community)}: ${esc(s.worst.fault).slice(0, 48)}` : '', 'map-pin')}
     </div>
     <div class="mt-4">${card('Real queue vs nearest-first', tableWrap(
-      '<th>Reference</th><th>Community</th><th>Issue</th><th>Priority</th><th>Distance</th><th class="text-right">Real</th><th class="text-right">Nearest-first</th><th class="text-right">Change</th>',
+      '<th>Reference</th><th>Community</th><th>Issue</th><th>Priority</th><th>To nearest office</th><th class="text-right">Real</th><th class="text-right">Nearest-first</th><th class="text-right">Change</th>',
       f.what_if.map(r => `<tr class="row-link" data-job="${esc(r.job_id)}"><td>${ref(r.job_id)}</td><td>${esc(r.community)}</td>
         <td class="max-w-[280px] truncate" title="${esc(r.fault)}">${esc(r.fault)}</td><td>${priorityBadge(r)}</td><td class="text-slate-500">${dist(r.distance)}</td>
         <td class="text-right font-medium tabular-nums">${r.position}</td><td class="text-right tabular-nums text-slate-500">${r.nearest_first_position}</td>
@@ -509,7 +511,7 @@ async function renderJob(id, trade) {
           { desc: 'Re-read and re-ranked; the original report date is kept.' })}
 
         ${card('Logistics', `
-          <div class="kv"><span class="text-slate-500">Distance from Darwin</span><span>${dist(d)}${d.approx ? ' <span class="text-xs text-slate-400">straight line</span>' : ''}</span></div>
+          <div class="kv"><span class="text-slate-500">Nearest housing office</span><span>${d.km == null ? '<span class="text-slate-400">unknown (community not listed)</span>' : `${esc(d.office)} · ${dist(d)}`}</span></div>
           <div class="h-px bg-slate-100"></div>
           <div class="kv"><span class="text-slate-500">Same trip possible</span><span class="text-right">${j.logistics.shared_trip.length ? j.logistics.shared_trip.map(x => ref(x)).join(', ') : 'none'}</span></div>
           <div class="h-px bg-slate-100"></div>
@@ -689,7 +691,7 @@ function stageResult(r) {
             <div>Safety level <b class="text-slate-900">${s4.safety_level}</b> <span class="text-slate-400">(${esc(s4.safety_reason)})</span></div>`)}
         ${step(5, 'Logistics', `
             <div>Required trade: <b class="text-slate-900">${s5.required_trades.length ? esc(s5.required_trades.join(' or ')) : 'not confirmed yet'}</b></div>
-            <div>Distance from Darwin: ${dist(s5.distance)}${s5.distance.approx ? ' <span class="text-xs text-slate-400">straight-line estimate</span>' : ''} <span class="text-xs text-slate-400">· not used for order</span></div>
+            <div>Nearest housing office: ${s5.distance.km == null ? '<span class="text-slate-400">unknown (community not listed)</span>' : `${esc(s5.distance.office)} · ${dist(s5.distance)} straight line`} <span class="text-xs text-slate-400">· not used for order</span></div>
             <div>Suggested tradie: ${esc(s5.recommended_tradie || (s5.required_trades.length ? 'none available' : 'after a tier call sets the trade'))}</div>`)}
         ${step(6, 'Ranking and explanation', `
             <div class="flex flex-wrap items-center gap-2">${s6.in_review_band ? '<span class="badge b-review">Review band</span>' : `<span class="badge b-outline">Rank ${s6.position} of ${s6.queue_length}</span>`}
