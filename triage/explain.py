@@ -27,7 +27,7 @@ from triage.models import (
     VerifiedSpan,
 )
 from triage.ranking import REVIEW_BAND_REASON
-from triage.tiers import TIER_TABLE
+from triage.tiers import COORDINATOR_SOURCE, TIER_TABLE
 
 
 class ReasoningTrace(BaseModel):
@@ -142,7 +142,8 @@ SMS_PATH_SENTENCES: dict[SmsPath, str] = {
     "safety_active": "It is marked as a safety job and is being handled as a priority. " + _KEEP_UPDATED,
     "safety_conditional": "It is marked for a safety check, which a coordinator will do as a priority. "
     + _KEEP_UPDATED,
-    "urgent": "It's being treated as an urgent repair under NT rules. " + _KEEP_UPDATED,
+    # E7: the SMS never names a source, so no "under NT rules": a coordinator's call has none.
+    "urgent": "It's being treated as an urgent repair. " + _KEEP_UPDATED,
     "routine": "It's being treated as a routine repair. " + _KEEP_UPDATED,
     "review": "It has been sent to a coordinator for a direct review before scheduling. "
     "We'll update you once that's done.",
@@ -277,6 +278,8 @@ _WHY_STATUS: dict[SmsPath, str] = {
 WHY_IMPACT_LINE = "We know this is hard to live with. A coordinator can see how long it has been waiting."
 # Master §5.1: the tenant learns a person moved it, never the tag, a position or another job.
 WHY_PINNED_LINE = "A coordinator has adjusted when your repair will be handled."
+# Any coordinator repair-type call (treat-like or no-fit): never the reason or the entry name.
+WHY_CALLED_LINE = "A coordinator chose how to classify this repair."
 _NT_TIME = ZoneInfo("Australia/Darwin")
 
 
@@ -292,7 +295,7 @@ def _why_subject(ref: str, fault: str | None) -> str:
     return f'Your "{words}" repair ({ref})' if words else f"Your repair ({ref})"
 
 
-def tenant_why(job: EnrichedJob | ExtractionResult, *, pinned: bool) -> str:
+def tenant_why(job: EnrichedJob | ExtractionResult, *, pinned: bool, classified_by_coordinator: bool) -> str:
     """The answer to "WHY <ref>": this job's fault, ref, category word and received date, and
     one line if a coordinator pinned it.
 
@@ -300,14 +303,14 @@ def tenant_why(job: EnrichedJob | ExtractionResult, *, pinned: bool) -> str:
         ValueError: an OK ExtractionResult, whose answer must come from its EnrichedJob, or a
             pinned ExtractionResult (only a ranked job can be pinned).
     """
-    # pinned has no default: a forgotten argument must fail, not hide a coordinator decision.
+    # No defaults: a forgotten argument must fail, not hide a coordinator decision.
     # Invariant 10: reads this job only, so no position, other job, count or decided_by.
     # Never explains how jobs are ranked and never states a timeframe.
     if isinstance(job, ExtractionResult):
         if job.status is ExtractionStatus.OK:
             raise ValueError(f"{job.request_id}: extracted report; build the answer from its EnrichedJob")
-        if pinned:
-            raise ValueError(f"{job.request_id}: not a ranked job, so it cannot be pinned")
+        if pinned or classified_by_coordinator:
+            raise ValueError(f"{job.request_id}: not a ranked job, so it cannot be pinned or classified")
         path: SmsPath = "flagged" if job.status is ExtractionStatus.FLAGGED_FOR_HUMAN else "out_of_scope"
         # No job, so no received date to state.
         ref = job.request_id
@@ -317,6 +320,7 @@ def tenant_why(job: EnrichedJob | ExtractionResult, *, pinned: bool) -> str:
     received = job.original_report_timestamp.astimezone(_NT_TIME)
     return " ".join((
         f"{_why_subject(ref, _verified_fault_text(job))} {_WHY_STATUS[path]}",
+        *((WHY_CALLED_LINE,) if classified_by_coordinator else ()),
         *((WHY_PINNED_LINE,) if pinned else ()),
         f"Yours was received on {received.day} {received:%B %Y}.",
         WHY_IMPACT_LINE,
@@ -329,6 +333,8 @@ def _source_text(source: str, tier: str) -> str:
         return "nt.gov.au — " + ("on the repaired-first list" if tier == "dangerous" else "general repairs list")
     if source.startswith("RTA "):
         return f"NT Residential Tenancies Act {source.removeprefix('RTA ')} — emergency repair"
+    if source == COORDINATOR_SOURCE:  # neither law nor guidance: one coordinator's call on this job
+        return "coordinator's call — no listed fault fits"
     raise ValueError(f"unknown tier source: {source!r}")
 
 

@@ -303,7 +303,7 @@ def test_tenant_text_never_mentions_the_second_reader() -> None:
     plain_jobs = [j for j, _ in offline_jobs()]
     for job in plain_jobs:
         read_job = attach(job, noisy)
-        for render in (tenant_sms, lambda j: tenant_why(j, pinned=False), lambda j: tenant_why(j, pinned=True)):
+        for render in (tenant_sms, lambda j: tenant_why(j, pinned=False, classified_by_coordinator=False), lambda j: tenant_why(j, pinned=True, classified_by_coordinator=True)):
             text = render(read_job)
             assert text == render(job)
             assert not any(word in text.lower() for word in TENANT_BANNED), text

@@ -22,6 +22,7 @@ from triage.explain import (
     tenant_sms,
     tenant_sms_report,
     tenant_why,
+    WHY_CALLED_LINE,
     WHY_PINNED_LINE,
 )
 from triage.models import EnrichedJob, ExtractionResult, ExtractionStatus, VerifiedSpan
@@ -250,9 +251,9 @@ def test_several_sources_joined() -> None:
 def test_tenant_sms_names_no_source_or_tier_label(name: str) -> None:
     (tr,) = traces(entry_job(name))
     sms = render_tenant_sms(tr)
-    for word in ("dangerous", "standard", "nt.gov", "RTA", "Act"):
+    for word in ("dangerous", "standard", "nt.gov", "RTA", "Act", "NT rules"):
         assert word not in sms, word
-    expected = "urgent repair under NT rules" if TIER_TABLE[name].tier == "dangerous" else "routine repair"
+    expected = "urgent repair" if TIER_TABLE[name].tier == "dangerous" else "routine repair"
     assert f"It's being treated as an {expected}." in sms or f"It's being treated as a {expected}." in sms
 
 
@@ -591,7 +592,7 @@ WHY_IMPACT = "We know this is hard to live with. A coordinator can see how long 
 ])
 @pytest.mark.parametrize("community", ["Darwin", "Wadeye", "Atlantis"])
 def test_why_per_category(path: str, status: str, community: str) -> None:
-    why = tenant_why(in_community(path_job(path, fault="kitchen tap dripping"), community), pinned=False)
+    why = tenant_why(in_community(path_job(path, fault="kitchen tap dripping"), community), pinned=False, classified_by_coordinator=False)
     assert why == (f'Your "kitchen tap dripping" repair (R-3F9A1C2B) {status} '
                    f"Yours was received on 28 September 2026. {WHY_IMPACT} {HELP}")
 
@@ -600,18 +601,18 @@ def test_why_date_is_nt_local() -> None:
     # 20:00 UTC on the 28th is 05:30 on the 29th in Darwin.
     job = EnrichedJob.model_validate({**path_job("routine").model_dump(),
                                       "original_report_timestamp": datetime(2026, 9, 28, 20, 0, tzinfo=timezone.utc)})
-    assert "Yours was received on 29 September 2026." in tenant_why(job, pinned=False)
+    assert "Yours was received on 29 September 2026." in tenant_why(job, pinned=False, classified_by_coordinator=False)
 
 
 @pytest.mark.parametrize("status", [ExtractionStatus.FLAGGED_FOR_HUMAN, ExtractionStatus.NO_FAULT_NAMED])
 def test_flagged_and_out_of_scope_why(status: ExtractionStatus) -> None:
-    why = tenant_why(not_extracted(status), pinned=False)
+    why = tenant_why(not_extracted(status), pinned=False, classified_by_coordinator=False)
     assert why == f"Your repair (R-3F9A1C2B) is with a coordinator, who is deciding what kind of repair it is. {WHY_IMPACT} {HELP}"
 
 
 def test_ok_extraction_result_has_no_why() -> None:
     with pytest.raises(ValueError, match="EnrichedJob"):
-        tenant_why(not_extracted(ExtractionStatus.OK), pinned=False)
+        tenant_why(not_extracted(ExtractionStatus.OK), pinned=False, classified_by_coordinator=False)
 
 
 WHY_BANNED = ("position", "queue", "number", "ahead", "behind", "other job", "other tenant", "tier", "point",
@@ -621,12 +622,13 @@ WHY_BANNED = ("position", "queue", "number", "ahead", "behind", "other job", "ot
 
 
 def every_why() -> list[str]:
-    whys = [tenant_why(in_community(path_job(p), c), pinned=False) for p in ("safety_active", "safety_conditional", "urgent",
+    whys = [tenant_why(in_community(path_job(p), c), pinned=False, classified_by_coordinator=False) for p in ("safety_active", "safety_conditional", "urgent",
                                                              "routine", "review") for c in ("Darwin", "Wadeye", "Atlantis")]
-    # Pinned answers too: the coordinator's line must obey the same banned-word rules.
-    whys += [tenant_why(in_community(path_job(p), "Wadeye"), pinned=True) for p in RANKED_PATHS]
-    return [*whys, tenant_why(not_extracted(ExtractionStatus.FLAGGED_FOR_HUMAN), pinned=False),
-            tenant_why(not_extracted(ExtractionStatus.NO_FAULT_NAMED), pinned=False)]
+    # Pinned and classified answers too: the coordinator's lines obey the same banned-word rules.
+    whys += [tenant_why(in_community(path_job(p), "Wadeye"), pinned=pinned, classified_by_coordinator=called)
+             for p in RANKED_PATHS for pinned, called in ((True, False), (False, True), (True, True))]
+    return [*whys, tenant_why(not_extracted(ExtractionStatus.FLAGGED_FOR_HUMAN), pinned=False, classified_by_coordinator=False),
+            tenant_why(not_extracted(ExtractionStatus.NO_FAULT_NAMED), pinned=False, classified_by_coordinator=False)]
 
 
 def test_no_why_uses_banned_wording() -> None:
@@ -640,15 +642,16 @@ def test_why_reads_only_the_tenants_own_job() -> None:
     # No queue, trace or position can reach it: its only input is this job's own record.
     # pinned is a bare bool: it carries no position, tag or other job (master §5.1).
     params = inspect.signature(tenant_why).parameters
-    assert list(params) == ["job", "pinned"]
-    assert params["pinned"].kind is inspect.Parameter.KEYWORD_ONLY
-    assert params["pinned"].default is inspect.Parameter.empty
+    assert list(params) == ["job", "pinned", "classified_by_coordinator"]
+    for flag in ("pinned", "classified_by_coordinator"):
+        assert params[flag].kind is inspect.Parameter.KEYWORD_ONLY
+        assert params[flag].default is inspect.Parameter.empty
 
 
 @given(path=st.sampled_from(RANKED_PATHS))
 def test_a_pin_adds_exactly_one_line_to_why(path: str) -> None:
     job = path_job(path)
-    plain, pinned = tenant_why(job, pinned=False), tenant_why(job, pinned=True)
+    plain, pinned = tenant_why(job, pinned=False, classified_by_coordinator=False), tenant_why(job, pinned=True, classified_by_coordinator=False)
     assert pinned != plain and pinned.replace(WHY_PINNED_LINE + " ", "", 1) == plain
     assert pinned.count(WHY_PINNED_LINE) == 1
     assert WHY_PINNED_LINE == "A coordinator has adjusted when your repair will be handled."
@@ -656,7 +659,7 @@ def test_a_pin_adds_exactly_one_line_to_why(path: str) -> None:
 
 def test_only_a_ranked_job_can_be_pinned_and_pinned_must_be_given() -> None:
     with pytest.raises(ValueError, match="cannot be pinned"):
-        tenant_why(not_extracted(ExtractionStatus.FLAGGED_FOR_HUMAN), pinned=True)
+        tenant_why(not_extracted(ExtractionStatus.FLAGGED_FOR_HUMAN), pinned=True, classified_by_coordinator=False)
     with pytest.raises(TypeError):
         tenant_why(path_job("routine"))  # type: ignore[call-arg]
 
@@ -670,7 +673,7 @@ def test_same_own_facts_different_queue_give_identical_why(path: str, queue_a: l
     for queue in (queue_a, queue_b, []):
         jobs = {j.request_id: j for j in (own, *queue)}
         rank([to_rank_input(j) for j in jobs.values()])  # the queue exists; WHY must not depend on it
-        whys.append(tenant_why(jobs[own.request_id], pinned=False))
+        whys.append(tenant_why(jobs[own.request_id], pinned=False, classified_by_coordinator=False))
     assert whys[0] == whys[1] == whys[2]
     for other in (*queue_a, *queue_b):
         assert other.request_id not in whys[0]
@@ -682,7 +685,7 @@ def test_logistics_fields_naming_other_jobs_never_change_the_why() -> None:
                                        "starvation_line": "3 jobs waiting over 14 days", "distance_cost_km": 412, "nearest_office": "Palmerston office",
                                        "capacity_block_flag": True, "next_actionable": "Thursday",
                                        "flags": ("Possible duplicate (also R-7D04E8A1)",)})
-    assert tenant_why(busy, pinned=False) == tenant_why(own, pinned=False)
+    assert tenant_why(busy, pinned=False, classified_by_coordinator=False) == tenant_why(own, pinned=False, classified_by_coordinator=False)
 
 
 def test_coordinator_view_shows_tenant_asked_why_and_tenant_text_does_not_change() -> None:
@@ -728,8 +731,8 @@ def test_no_tenant_text_explains_ranking_or_states_a_timeframe() -> None:
 def test_every_dangerous_entry_reads_urgent(entry: str) -> None:
     # Category word follows the tier: these cite no RTA s63, and must still read urgent.
     job = hazard_job(entry, fault="drain overflowing", safety="none")
-    assert "It's being treated as an urgent repair under NT rules." in tenant_sms(job)
-    assert "is booked as an urgent repair." in tenant_why(job, pinned=False)
+    assert "It's being treated as an urgent repair." in tenant_sms(job)
+    assert "is booked as an urgent repair." in tenant_why(job, pinned=False, classified_by_coordinator=False)
 
 
 
@@ -739,3 +742,28 @@ def test_review_entry_shows_the_same_distance_row() -> None:
     assert "~250 km to nearest NT Housing office (Palmerston office) — straight-line; actual dispatch point not known" in render_review_entry(job)
     unknown = standard_job("R-BBBB", community="Atlantis", **UNTIERED)
     assert "unknown (community not in location table)" in render_review_entry(unknown)
+
+
+@pytest.mark.parametrize("name", ["no listed fault fits — emergency", "no listed fault fits — general"])
+def test_a_no_fit_entry_cites_the_coordinator_never_an_authority(name: str) -> None:
+    (tr,) = traces(entry_job(name))
+    view = render_coordinator(tr)
+    assert "coordinator's call — no listed fault fits" in view
+    for word in ("Residential Tenancies", "nt.gov.au", "emergency repair", "repaired-first"):
+        assert word not in view, word
+
+
+@given(path=st.sampled_from(RANKED_PATHS))
+def test_a_coordinator_call_adds_exactly_one_line_to_why_and_nothing_to_the_sms(path: str) -> None:
+    job = path_job(path)
+    plain = tenant_why(job, pinned=False, classified_by_coordinator=False)
+    called = tenant_why(job, pinned=False, classified_by_coordinator=True)
+    assert called.replace(WHY_CALLED_LINE + " ", "", 1) == plain and called.count(WHY_CALLED_LINE) == 1
+    both = tenant_why(job, pinned=True, classified_by_coordinator=True)
+    assert both.replace(WHY_CALLED_LINE + " ", "", 1).replace(WHY_PINNED_LINE + " ", "", 1) == plain
+    assert WHY_CALLED_LINE == "A coordinator chose how to classify this repair."
+
+
+def test_only_a_ranked_job_can_be_classified() -> None:
+    with pytest.raises(ValueError, match="cannot be pinned or classified"):
+        tenant_why(not_extracted(ExtractionStatus.FLAGGED_FOR_HUMAN), pinned=False, classified_by_coordinator=True)

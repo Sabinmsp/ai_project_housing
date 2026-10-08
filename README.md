@@ -108,16 +108,17 @@ Press Ctrl+C to stop it. `PORT=8050` uses another port if 8040 is busy.
 
 It starts empty and never loads sample files. A report enters only when someone uploads a
 document (a GEHSF03 PDF, one report per issue row, or a .txt report) or records a call; it then
-runs through `triage/pipeline.py`, the same Stages 1 to 6 the CLI uses, and the page shows what
-each stage produced. Reports, each report's Stage 2 result and every coordinator decision are
+runs through `triage/pipeline.py`, the same six steps the CLI uses, and the page shows what each
+step produced: Received · Read · Quotes checked · Repair type · Safety · Queue place.
+Reports, each report's reading and every coordinator decision are
 saved in SQLite (`data/fairfix.db`, git-ignored; `FAIRFIX_DB=...` to move it), so a restart
 rebuilds the queue without calling the model again. Reports → Clear all data empties it.
 
-Stage 2 reuses the model's saved answer when the exact same text was read before
+The Read step reuses the model's saved answer when the exact same text was read before
 (`data/recorded/`). New text is read live with `TRIAGE_LIVE=1` and a funded key (the answer is
 saved for next time, in `data/recorded/by_model/<model>/` so one model never overwrites
-another's); without that it is flagged for a human, never guessed. The second reader runs only in
-live mode with `TYPESAFE_API_KEY`, as in `demo.py`.
+another's); without that it is listed as "Couldn't read automatically", never guessed. The second
+check (Jev, `triage/second_reader.py`) runs only in live mode with `TYPESAFE_API_KEY`, as in `demo.py`.
 `TRIAGE_OFFLINE_FALLBACK=1` uses the labelled regex stand-in instead. `PORT=...` changes the port.
 
 Sign in with a prototype account (not production sign-in):
@@ -125,25 +126,24 @@ Sign in with a prototype account (not production sign-in):
 | Account | Password | Can do |
 |---|---|---|
 | `officer` | `Officer1!` | Record a phone call or message, upload a GEHSF03 / .txt form, see their own submissions and progress (never the priority) |
-| `admin` | `Admin1!` | Work the queue, make tier calls, assign tradies, close jobs, see fairness |
+| `admin` | `Admin1!` | Work the queue, choose repair types, move jobs, assign tradies, close jobs, see the Communities page |
 
 | Admin page | What it shows |
 |---|---|
 | Dashboard | Open requests, critical, high priority, tradie matches; the top of the priority queue; workload |
-| Upload report | Upload a document or record a call; shows the Stage 1 to 6 result for each report |
-| Repair Requests | Every report, filterable: needs a read, review band, open, assigned, completed |
-| Priority Queue | The review band, then the ranked queue with each job's reason |
-| Job (click a row) | The exact text the model read, its facts with each quote checked, the why-trace, tenant SMS and "why is my repair here?" answer, tier call, **assign a tradie** with recommendations, close or reopen, follow-up (escalation), audit trail |
-| Communities | Open jobs, safety jobs and the oldest wait per community |
-| Fairness Monitor | What a nearest-first queue would do instead (comparison only) |
+| Upload report | Upload a document or record a call; shows each step's result (Received · Read · Quotes checked · Repair type · Safety · Queue place) |
+| Repair Requests | Every report, filterable: couldn't read automatically, needs a decision, open, assigned, completed |
+| Priority Queue | Jobs that need a decision, then the queue, each row with a one-line plain reason |
+| Job (click a row) | "Why it's here" with the working underneath, the exact text the model read and its facts with each quote checked, tenant SMS and "why is my repair here?" answer, **choose repair type** (treat like a listed repair, or "none of these fit"), **move** in the queue, **assign a tradie** with recommendations, close or reopen, follow-up, audit trail |
+| Communities | Open jobs, safety jobs, jobs needing a decision and the oldest wait per community, beside what coordinators did by hand there: jobs moved, moved again, up/down, move reasons, and "no listed fault fits" calls (emergency vs general). Ranking can't favour town (distance isn't in the sort key, oldest report first, property tests), so no nearest-first comparison is shown; human choices are where town-first bias could re-enter, so they are counted here |
 | Tradies | The roster (5 demo tradies), availability, current assignments, add a tradie |
-| Reports | Counts by priority, NT category, status and community; CSV export |
+| Reports | Counts by priority, repair type, status and community; CSV export |
 
 The UI uses Tailwind and Lucide icons, both vendored in `app/static/vendor/` so it works offline.
-"Priority" labels (Critical, High, Medium, Low) are display names for the pipeline's safety level
-and urgency score; the order always comes from Stage 6.
+"Priority" labels (Critical, High, Medium, Routine, Needs a decision) are display names for the
+pipeline's safety level and repair type; the order always comes from the ranking step.
 
-Distance is Stage 5's straight-line km to the nearest NT housing office (`triage/distances.py`);
+Distance is the straight-line km to the nearest NT housing office (`triage/distances.py`);
 communities not in `data/communities.json` show "unknown". It is never used for order.
 
 **Tradie recommendations** are advice for one job: qualified for the fault's trade, available,
@@ -207,7 +207,7 @@ re-read adds `re_read  read 1: none; read 2: active; used: read 2  safer reading
 
 Initial SMS (`--offline` run of the example report above):
 
-> Housing repair R-0000ABCD: we have your report about "toilet blocked". It's being treated as an urgent repair under NT rules. We'll keep you updated. Reply HELP with R-0000ABCD if anything changes or gets worse.
+> Housing repair R-0000ABCD: we have your report about "toilet blocked". It's being treated as an urgent repair. We'll keep you updated. Reply HELP with R-0000ABCD if anything changes or gets worse.
 
 Reply to `WHY R-0000ABCD`:
 
@@ -251,7 +251,8 @@ listing each repair and its ref.
 - Jev's 0.7 low-confidence threshold is uncalibrated.
 - Distance is straight-line to the nearest NT Housing office, used as an assumed reference point. We don't know where trades are dispatched from. A community not in `data/communities.json` (or misspelt) shows "unknown"; matching is exact.
 - The offline test double cannot read dialect or informal wording, and never reports an unclear hazard, a sign, a mismatch, harm or worsening.
-- Faults not on the tier table (e.g. air conditioning) go to the review band for a coordinator's tier call.
+- Faults not on the NT repair lists (e.g. air conditioning) go to "Needs a decision" until a coordinator chooses the repair type.
+- One GEHSF03 row (pdf/05, gutter) has no saved answer; it shows 'Couldn't read automatically' until re-recorded with the original model.
 - Not built: automatic job bundling (the web app only shows same-community jobs), the multi-step SMS sequence, actually sending SMS.
 - `demo.py`'s SQLite store is in memory. The web app saves to `data/fairfix.db` (git-ignored).
 - The web app's sign-in uses two prototype accounts with passwords in the code. Not production authentication.
