@@ -242,6 +242,37 @@ def test_uploads_and_decisions_survive_a_restart_without_calling_the_model(tmp_p
     server._workspace = None
 
 
+def test_the_same_file_uploaded_twice_is_refused_and_makes_no_second_job(empty):
+    first = empty.post("/api/reports/upload", files={"file": (FORM.name, FORM.read_bytes(), "application/pdf")})
+    jobs = empty.get("/api/queue").json()
+    again = empty.post("/api/reports/upload", files={"file": ("renamed.pdf", FORM.read_bytes(), "application/pdf")})
+    assert again.status_code == 409
+    for rep in first.json()["reports"]:
+        assert rep["report_id"] in again.json()["detail"]
+    assert empty.get("/api/queue").json() == jobs
+
+
+def test_a_different_file_with_the_same_fault_is_still_accepted(empty):
+    # The two files differ only in their last characters, so only a whole-file comparison passes.
+    for message in ("toilet blocked", "toilet blocked, second toilet"):
+        body = _report_file("T-01", "Darwin", "2026-09-20 09:00", message).encode()
+        assert empty.post("/api/reports/upload", files={"file": ("a.txt", body, "text/plain")}).status_code == 200
+
+
+def test_a_repeat_upload_is_still_refused_after_a_restart_but_not_after_reset(tmp_path):
+    db = str(tmp_path / "fairfix.db")
+    server._workspace = server.Workspace(db_path=db, client=_Offline())
+    c = TestClient(server.app)
+    c.post("/api/login", json={"username": "admin", "password": "Admin1!"})
+    upload = lambda: c.post("/api/reports/upload", files={"file": (FORM.name, FORM.read_bytes(), "application/pdf")})
+    assert upload().status_code == 200
+    server._workspace = server.Workspace(db_path=db, client=_Offline())
+    assert upload().status_code == 409
+    c.post("/api/reset")
+    assert upload().status_code == 200
+    server._workspace = None
+
+
 def test_reset_clears_everything(empty):
     empty.post("/api/reports/upload", files={"file": (FORM.name, FORM.read_bytes(), "application/pdf")})
     assert empty.post("/api/reset").status_code == 200

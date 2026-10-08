@@ -224,6 +224,9 @@ class Workspace:
         self.tradies = {int(k): v for k, v in state.get("tradies", {}).items()} or \
             {i: {"id": i, "available": True, **t} for i, t in enumerate(SEED_TRADIES, start=1)}
         self.submitted: dict[str, dict] = state.get("submitted", {})
+        # sha256 of each uploaded file -> the reports it made, so a file uploaded twice by mistake
+        # is refused instead of making a second copy of every job.
+        self.uploads: dict[str, list[str]] = state.get("uploads", {})
         self.audit: list[dict] = state.get("audit", [])
         self.skipped: list[dict] = []
         self._restore()
@@ -233,7 +236,7 @@ class Workspace:
         self.repo.save_state({
             "tier_calls": {k: v.model_dump(mode="json") for k, v in self.tier_calls.items()},
             "status": self.status, "extra_flags": self.extra_flags, "tradies": self.tradies,
-            "submitted": self.submitted, "audit": self.audit,
+            "submitted": self.submitted, "uploads": self.uploads, "audit": self.audit,
         })
 
     def _restore(self) -> None:
@@ -717,14 +720,22 @@ async def upload_report(request: Request, file: UploadFile = File(...)) -> dict:
     content = await file.read()
     if not content:
         raise HTTPException(400, "The file is empty")
+    digest = hashlib.sha256(content).hexdigest()
     with _lock, tempfile.TemporaryDirectory() as tmp:
-        (Path(tmp) / name).write_bytes(content)
         w = ws()
+        # Exact bytes only, whatever the file name: a different file about the same fault is a
+        # genuine report and goes through (duplicates are flagged, never merged — master C4).
+        if digest in w.uploads:
+            raise HTTPException(409, "This file was already uploaded (reports "
+                                     + ", ".join(w.uploads[digest]) + "). Use Follow-up on those jobs instead.")
+        (Path(tmp) / name).write_bytes(content)
         before = len(w.skipped)
         ids = w.load_folder(Path(tmp), by=user["name"])
         problems = w.skipped[before:]
         if not ids:
             raise HTTPException(400, problems[0]["reason"] if problems else "No report found in that file")
+        w.uploads[digest] = ids
+        w.save()
         return {"reports": [stage_view(w, rid) for rid in ids]}
 
 
