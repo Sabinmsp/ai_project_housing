@@ -336,7 +336,8 @@ def test_every_pattern_is_keyed_by_a_table_name():
 
 
 def test_every_table_name_has_a_pattern():
-    assert set(TIER_TABLE) <= set(_FAULT_PATTERNS)
+    # Every name the model can match; coordinator-only entries are never matched.
+    assert set(FAULT_NAMES) <= set(_FAULT_PATTERNS)
 
 
 def test_extraction_imports_only_fault_names_from_tiers():

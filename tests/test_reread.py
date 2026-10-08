@@ -204,7 +204,7 @@ def test_tenant_text_unaffected_by_the_reread_record() -> None:
     job = built_job()
     marked = reread.attach(job, ReRead(read_1="none", read_2="active", unavailable_reason=None, used="read 2"),
                            ("Readings inconsistent — read 1: none, read 2: active; the safer reading is used. Check.",))
-    for render in (tenant_sms, lambda j: tenant_why(j, pinned=False), lambda j: tenant_why(j, pinned=True)):
+    for render in (tenant_sms, lambda j: tenant_why(j, pinned=False, classified_by_coordinator=False), lambda j: tenant_why(j, pinned=True, classified_by_coordinator=True)):
         assert render(marked) == render(job)
         assert "re-read" not in render(marked).lower() and "reading" not in render(marked).lower()
 

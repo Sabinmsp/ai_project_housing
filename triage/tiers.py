@@ -25,10 +25,17 @@ class FaultEntry(BaseModel):
     tier: Literal["dangerous", "standard"]
     degraded: bool
     sources: tuple[str, ...] = Field(min_length=1)
+    # True only for a coordinator's own call on one job: never in FAULT_NAMES, so the model can't match it.
+    coordinator_only: bool
 
 
 def _entry(name: str, tier: Literal["dangerous", "standard"], *sources: str, degraded: bool = False) -> FaultEntry:
-    return FaultEntry(name=name, tier=tier, degraded=degraded, sources=sources)
+    return FaultEntry(name=name, tier=tier, degraded=degraded, sources=sources, coordinator_only=False)
+
+
+COORDINATOR_SOURCE = "coordinator's call"
+NO_FIT_EMERGENCY = "no listed fault fits — emergency"
+NO_FIT_GENERAL = "no listed fault fits — general"
 
 
 _ENTRIES = (
@@ -48,10 +55,15 @@ _ENTRIES = (
     _entry("stove element not working", "standard", "nt.gov.au"),
     _entry("fan not working properly", "standard", "nt.gov.au"),
     _entry("power point not working", "standard", "nt.gov.au"),
+    # Master §4.4/§4.8/FR2z as revised: a named coordinator's recorded call on a single job is the
+    # authority here, never the model and never reused automatically.
+    FaultEntry(name=NO_FIT_EMERGENCY, tier="dangerous", degraded=False, sources=(COORDINATOR_SOURCE,), coordinator_only=True),
+    FaultEntry(name=NO_FIT_GENERAL, tier="standard", degraded=False, sources=(COORDINATOR_SOURCE,), coordinator_only=True),
 )
 
 # MappingProxyType is a read-only view; _ENTRIES is a tuple, so nothing else holds the dict.
 TIER_TABLE = MappingProxyType({e.name: e for e in _ENTRIES})
 
-# What the extraction model may see: names only, never tiers or sources.
-FAULT_NAMES = tuple(TIER_TABLE)
+# What the extraction model may see: names only, never tiers or sources, and never a
+# coordinator-only entry. Also the recording key (recording.prompt_hash), so it must not change.
+FAULT_NAMES = tuple(name for name, e in TIER_TABLE.items() if not e.coordinator_only)

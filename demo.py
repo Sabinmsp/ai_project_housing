@@ -212,9 +212,9 @@ def main(argv: list[str] | None = None) -> None:
     if args.why:
         _heading(f"TENANT ASKED: WHY {args.why}")
         if args.why in by_id:
-            print(tenant_why(by_id[args.why], pinned=False))
+            print(tenant_why(by_id[args.why], pinned=False, classified_by_coordinator=False))
         elif args.why in not_extracted:
-            print(tenant_why(not_extracted[args.why], pinned=False))
+            print(tenant_why(not_extracted[args.why], pinned=False, classified_by_coordinator=False))
         else:
             print(UNKNOWN_REF_REPLY)
 

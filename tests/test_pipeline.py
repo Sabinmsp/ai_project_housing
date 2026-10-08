@@ -10,7 +10,7 @@ from triage.explain import ReasoningTrace
 from triage.extraction import OfflineExtractor
 from triage.intake import create_report
 from triage.models import EnrichedJob, ExtractedFacts, ExtractionResult, ExtractionStatus, Report
-from triage.tiers import TIER_TABLE
+from triage.tiers import FAULT_NAMES, TIER_TABLE
 from triage.trades import TRADE_FOR_FAULT
 
 NT = timezone(timedelta(hours=9, minutes=30))
@@ -65,4 +65,5 @@ def test_an_unlisted_community_gets_no_distance_rather_than_a_guess():
 
 
 def test_every_listed_fault_has_a_required_trade():
-    assert set(TRADE_FOR_FAULT) == set(TIER_TABLE)
+    # Coordinator-only entries have none: the coordinator chooses the trade, as for unlisted faults.
+    assert set(TRADE_FOR_FAULT) == set(FAULT_NAMES)

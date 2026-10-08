@@ -39,7 +39,7 @@ from triage.pipeline import build_jobs, build_report_jobs, enrich_fault, save_ch
 from triage.ranking import NO_TIER_FLAG
 from triage.recording import RECORDED_DIR, RecordedClient, RecordingClient, RecordingMissing
 from triage.report_files import load_reports
-from triage.tiers import FAULT_NAMES, TIER_TABLE
+from triage.tiers import COORDINATOR_SOURCE, FAULT_NAMES, NO_FIT_EMERGENCY, NO_FIT_GENERAL, TIER_TABLE
 from triage.trades import ALL_TRADES, required_trades
 from triage.verification import verify_spans
 
@@ -48,7 +48,8 @@ STATIC = Path(__file__).resolve().parent / "static"
 NT_TIME = timezone(timedelta(hours=9, minutes=30))
 DB_PATH = os.environ.get("FAIRFIX_DB", str(ROOT / "data" / "fairfix.db"))
 
-SOURCE_LABELS = {"nt.gov.au": "NT Government repairs guidance (nt.gov.au)"}
+SOURCE_LABELS = {"nt.gov.au": "NT Government repairs guidance (nt.gov.au)",
+                 COORDINATOR_SOURCE: "coordinator's call — not from the NT repair lists"}
 
 # Prototype accounts only, not production authentication. The officer records reports;
 # the admin (maintenance coordinator) works the queue and assigns tradies.
@@ -202,10 +203,16 @@ class WorkspaceStore(SQLiteReportRepository):
 
 
 class TierCall(BaseModel):
+    """A coordinator's repair-type call on one job. community is stored at call time, so the
+    Communities counts keep the call even if a re-read later replaces the job."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     fault_name: str
     reason: str
     by: str
     at: datetime
+    community: str
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +228,9 @@ class Workspace:
         self.jobs: dict[str, EnrichedJob] = {}              # Stage 5 output per job
         self.facts: dict[str, ExtractedFacts] = {}          # the fault each job was built from
         state = self.repo.load_state()
-        self.tier_calls = {k: TierCall.model_validate(v) for k, v in state.get("tier_calls", {}).items()}
+        # Calls saved before community was stored take it from the job's report, which never changes.
+        self.tier_calls = {k: TierCall.model_validate(v if "community" in v else {**v, "community": self._report_community(k)})
+                           for k, v in state.get("tier_calls", {}).items()}
         self.status: dict[str, dict] = state.get("status", {})
         self.extra_flags: dict[str, list[str]] = state.get("extra_flags", {})
         self.tradies = {int(k): v for k, v in state.get("tradies", {}).items()} or \
@@ -237,6 +246,14 @@ class Workspace:
         self.pin_history: list[dict] = state.get("pin_history", [])
         self.skipped: list[dict] = []
         self._restore()
+
+    def _report_community(self, job_id: str) -> str:
+        """The community of the report a job came from (a compound report's child resolves to its parent)."""
+        child = self.repo.get_child(job_id)
+        report = self.repo.get(child.parent_report_id if child else job_id)
+        if report is None:
+            raise ValueError(f"saved repair-type call for {job_id}, but no report to take its community from")
+        return report.community
 
     # ---- persistence -------------------------------------------------------
     def save(self) -> None:
@@ -326,13 +343,13 @@ class Workspace:
         """The coordinator's tier call goes through the same Stage 4 rules as a list match."""
         report = self.repo.get(job.parent_report_id)
         unverified = verify_spans(report.raw_text, facts) if report else frozenset()
-        tier = lookup_tier([call.fault_name])
+        tier = lookup_tier([call.fault_name], coordinator_call=True)
         tally = compute_tally(tier, facts, unverified)
         return EnrichedJob.model_validate({
             **job.model_dump(), "tier": tier.tier, "tier_entry": tally.winner, "base_points": tally.base,
             "severity_bump": tally.bump, "urgency_tally": tally.tally, "tally_reasons": tally.reasons,
             "required_trades": required_trades(tally.winner),
-            "flags": (*job.flags, f'Repair type chosen by a coordinator: treated like "{call.fault_name}": {call.reason}'),
+            "flags": (*job.flags, f"Repair type chosen by a coordinator: {call_text(call)}"),
         })
 
     def log(self, job_id: Optional[str], actor: str, action: str, note: str = "") -> None:
@@ -460,6 +477,18 @@ FLAG_PLAIN = {NO_TIER_FLAG: "Not on the NT repair lists: a coordinator needs to 
 _HIGHEST_TIER = re.compile(r"Scored at the highest tier among them \((dangerous|standard)\)\.")
 
 
+NO_FIT = {NO_FIT_EMERGENCY: "emergency", NO_FIT_GENERAL: "general"}
+
+
+def call_text(call: TierCall) -> str:
+    """A coordinator's repair-type call in words. A "no listed fault fits" call names no list
+    entry and cites neither the Act nor nt.gov.au: the coordinator is the authority."""
+    repair = REPAIR_TYPE[TIER_TABLE[call.fault_name].tier]
+    if call.fault_name in NO_FIT:
+        return f"Coordinator's call: {repair} repair — no listed fault fits. Reason: {call.reason.rstrip('.')}."
+    return f"Treated like: {call.fault_name} ({repair}) — coordinator's call: {call.reason.rstrip('.')}."
+
+
 def plain_flag(flag: str) -> str:
     """A pipeline flag in the screen's vocabulary. The fact it states is unchanged."""
     flag = FLAG_PLAIN.get(flag, flag)
@@ -470,7 +499,7 @@ def source_sentence(tier: str, source: str) -> str:
     """One authority behind a listed fault, in words. Only the Act is called law (nt.gov.au is guidance)."""
     if source.startswith("RTA "):
         return f"Emergency repair under NT law (Residential Tenancies Act {source.removeprefix('RTA ')})."
-    if source in SOURCE_LABELS:
+    if source == "nt.gov.au":
         return f"{REPAIR_TYPE[tier]} repair in {SOURCE_LABELS[source]}."
     raise ValueError(f"no wording for source {source!r}")
 
@@ -511,8 +540,7 @@ def why_here(job: EnrichedJob, trace: Optional[ReasoningTrace], row: Optional[Di
     if call:
         # The coordinator's call, not the lists: an air conditioner treated like a stove is not
         # an emergency repair under the Act, so no source sentence is shown for it.
-        lines.append(f"Treated like: {call.fault_name} ({REPAIR_TYPE[trace.tier]}) — coordinator's call: "
-                     f"{call.reason.rstrip('.')}.")
+        lines.append(call_text(call))
     elif trace.tier is None:
         lines.append(NOT_LISTED)
     else:
@@ -533,7 +561,7 @@ def row_reason(job: EnrichedJob, trace: Optional[ReasoningTrace], call: Optional
     if trace.safety_level:  # safety outranks everything else, so it is the reason when present
         return SAFETY_PLAIN[trace.safety_level]
     if call:
-        return f"Treated like: {call.fault_name} ({REPAIR_TYPE[trace.tier]})"
+        return call_text(call) if call.fault_name in NO_FIT else f"Treated like: {call.fault_name} ({REPAIR_TYPE[trace.tier]})"
     if any(src.startswith("RTA ") for src in TIER_TABLE[trace.tier_entry].sources):
         return "Emergency repair under NT law"
     return f"{REPAIR_TYPE[trace.tier]} repair (NT Government guidance)"
@@ -605,15 +633,18 @@ def move_range(traces: list[ReasoningTrace], job_id: str) -> Optional[dict]:
 def trace_rows(trace: ReasoningTrace, row: Optional[DisplayRow], call: Optional[TierCall], date_only: bool) -> list[dict]:
     rows: list[dict] = []
     if call:
-        rows.append({"label": "Treated like",
-                     "value": f"{call.fault_name} ({REPAIR_TYPE[trace.tier]}) — coordinator's call: {call.reason}",
+        rows.append({"label": "Coordinator's call" if call.fault_name in NO_FIT else "Treated like",
+                     "value": call_text(call) if call.fault_name in NO_FIT
+                     else f"{call.fault_name} ({REPAIR_TYPE[trace.tier]}) — coordinator's call: {call.reason}",
                      "note": f"{call.by}, {call.at.astimezone(NT_TIME):%d %b %Y}"})
     if trace.tier is None:
         rows.append({"label": "Repair type", "value": "Not on the repair lists", "note": "Choose repair type"})
     else:
         sources = "; ".join(_source_label(s) for s in TIER_TABLE[trace.tier_entry].sources)
         rows += [
-            {"label": "Repair list match", "value": trace.tier_entry, "note": "name on the NT repair lists"},
+            {"label": "Repair list match",
+             "value": "none — coordinator's call" if TIER_TABLE[trace.tier_entry].coordinator_only else trace.tier_entry,
+             "note": "no listed fault fits" if TIER_TABLE[trace.tier_entry].coordinator_only else "name on the NT repair lists"},
             {"label": "Repair type", "value": REPAIR_TYPE[trace.tier], "note": sources},
             {"label": "Base points", "value": str(trace.base_points), "note": "from the repair type, not the text"},
             {"label": "Severity bump", "value": f"+{trace.severity_bump}", "note": "; ".join(trace.tally_reasons)},
@@ -675,7 +706,8 @@ def stage_view(w: Workspace, report_id: str) -> dict:
     out_jobs = []
     for job in jobs:
         trace, row = by_id.get(job.request_id), rows.get(job.request_id)
-        sms, why = tenant_sms(job), tenant_why(job, pinned=bool(row and row.pinned))
+        sms, why = tenant_sms(job), tenant_why(job, pinned=bool(row and row.pinned),
+                                               classified_by_coordinator=job.request_id in w.tier_calls)
         tier_sources = "; ".join(_source_label(s) for s in TIER_TABLE[job.tier_entry].sources) if job.tier_entry else None
         top = next((r for r in recommend_tradies(w, job) if r["recommended"]), None)
         out_jobs.append({
@@ -777,7 +809,7 @@ async def reference(request: Request) -> dict:
         communities = sorted(set(community_names()) | {j.community for j in w.jobs.values()})
         return {"communities": communities, "fault_names": list(FAULT_NAMES), "mode": w.client.describe(),
                 "trades": list(ALL_TRADES), "reason_tags": list(REASON_TAGS),
-                "repair_list": [{"name": e.name, "repair_type": REPAIR_TYPE[e.tier],
+                "repair_list": [{"name": e.name, "repair_type": REPAIR_TYPE[e.tier], "coordinator_only": e.coordinator_only,
                                  "sources": [_source_label(s) for s in e.sources]} for e in TIER_TABLE.values()]}
 
 
@@ -830,7 +862,8 @@ async def job_detail(job_id: str, request: Request, trade: Optional[str] = None)
         same_community = [j for k, j in w.open_jobs().items() if j.community == job.community]
         others = [j.request_id for j in same_community if j.request_id != job_id]
         oldest = max((days_waiting(j) for j in same_community), default=0)
-        sms, why = tenant_sms(job), tenant_why(job, pinned=bool(row and row.pinned))
+        sms, why = tenant_sms(job), tenant_why(job, pinned=bool(row and row.pinned),
+                                               classified_by_coordinator=job_id in w.tier_calls)
         return {
             **job_summary(w, job, trace, row),
             "raw_text": report.raw_text,
@@ -985,6 +1018,7 @@ async def previous_tier_calls(request: Request) -> list[dict]:
             fault = (next((s.text for s in job.spans if s.verified and s.field == "fault_description"), None)
                      or job.fault_description) if job else None
             rows.append({"job_id": job_id, "fault": fault, "job_open": job is not None, "treated_like": call.fault_name,
+                         "no_fit": call.fault_name in NO_FIT,
                          "repair_type": REPAIR_TYPE[TIER_TABLE[call.fault_name].tier], "by": call.by,
                          "reason": call.reason, "at": call.at.isoformat()})
         return rows
@@ -1008,7 +1042,8 @@ async def tier_call(job_id: str, data: TierCallIn, request: Request) -> dict:
             raise HTTPException(400, "This job already has a repair type from the NT repair lists")
         if data.fault_name not in TIER_TABLE:
             raise HTTPException(400, "Choose a fault from the list")
-        w.tier_calls[job_id] = TierCall(fault_name=data.fault_name, reason=data.reason.strip(), by=user["name"], at=_now())
+        w.tier_calls[job_id] = TierCall.model_validate({"fault_name": data.fault_name, "reason": data.reason.strip(),
+                                                        "by": user["name"], "at": _now(), "community": job.community})
         w.store_job(job, w.facts[job_id])
         w.log(job_id, user["name"], "Tier call", f'Counted as "{data.fault_name}" ({TIER_TABLE[data.fault_name].tier}). Reason: {data.reason.strip()}')
         w.save()
@@ -1173,58 +1208,52 @@ async def toggle_tradie(tradie_id: int, request: Request) -> dict:
         return {"ok": True, "available": tradie["available"]}
 
 
-@app.get("/api/fairness")
-async def fairness(request: Request) -> dict:
-    """The equity view: who is waiting where, and what a nearest-first queue would do instead."""
+@app.get("/api/communities")
+async def communities(request: Request) -> list[dict]:
+    """Who is waiting where, and what coordinators did by hand in each community. Display only.
+
+    Ranking can't favour town (distance isn't in the sort key; FIFO; property tests), so no
+    nearest-first comparison is shown. Pins and repair-type calls are human choices, which is
+    where town-first bias could re-enter, so they are counted here for the coordinator to see.
+    """
     require(request, "admin")
     with _lock:
         w = ws()
-        band, traces = w.ranking()
-        jobs = w.open_jobs()
-        communities: dict[str, dict] = {}
-        for job in jobs.values():
-            c = communities.setdefault(job.community, {"community": job.community, "open": 0, "safety": 0, "review_band": 0,
-                                                       "oldest_days": 0, "distance": distance_of(job)})
+        rows: dict[str, dict] = {}
+
+        def row(community: str) -> dict:
+            return rows.setdefault(community, {
+                "community": community, "open": 0, "safety": 0, "review_band": 0, "oldest_days": 0,
+                "distance": next((distance_of(j) for j in w.jobs.values() if j.community == community),
+                                 {"km": None, "office": None}),
+                "moved": {"jobs": 0, "repins": 0, "up": 0, "down": 0, "by_tag": dict.fromkeys(REASON_TAGS, 0)},
+                "no_fit_calls": {"emergency": 0, "general": 0}})
+
+        for job in w.open_jobs().values():
+            c = row(job.community)
             c["open"] += 1
             c["safety"] += to_rank_input(job).safety_level > 0
             c["review_band"] += job.in_review_band
             c["oldest_days"] = max(c["oldest_days"], days_waiting(job))
-
-        # Counterfactual only: the same jobs sorted nearest-first. Our queue never does this.
-        def km(t: ReasoningTrace) -> float:
-            d = distance_of(jobs[t.job_id])["km"]
-            return d if d is not None else float("inf")
-        what_if = {t.job_id: i for i, t in enumerate(sorted(traces, key=lambda t: (km(t), t.position)), start=1)}
-        rows = [{**job_summary(w, jobs[t.job_id], t), "nearest_first_position": what_if[t.job_id],
-                 "change": what_if[t.job_id] - t.position} for t in traces]
-        losers = [r for r in rows if r["change"] > 0]
-        # Display only, from the append-only history, so pins already cleared still count. One row
-        # per pinned job, read from its latest pin; moving the same job again is a re-pin.
+        # From the append-only history, so pins already cleared still count. One count per pinned
+        # job, read from its latest pin; moving the same job again is a re-pin.
         latest: dict[str, dict] = {}
-        repins: dict[str, int] = {}
         for h in (h for h in w.pin_history if h["event"] == "pinned"):
             if h["job_id"] in latest:
-                repins[h["community"]] = repins.get(h["community"], 0) + 1
+                row(h["community"])["moved"]["repins"] += 1
             latest[h["job_id"]] = h
-        overrides: dict[str, dict] = {}
         for h in latest.values():
-            o = overrides.setdefault(h["community"], {"community": h["community"], "jobs": 0, "repins": repins.get(h["community"], 0),
-                                                       "up": 0, "down": 0, "by_tag": dict.fromkeys(REASON_TAGS, 0)})
-            o["jobs"] += 1
-            o["by_tag"][h["tag"]] += 1
+            moved = row(h["community"])["moved"]
+            moved["jobs"] += 1
+            moved["by_tag"][h["tag"]] += 1
             if h["direction"] != "same":
-                o[h["direction"]] += 1
-        return {
-            "overrides": sorted(overrides.values(), key=lambda o: (-o["jobs"], o["community"])),
-            "communities": sorted(communities.values(), key=lambda c: -c["oldest_days"]),
-            "what_if": rows,
-            "summary": {
-                "jobs_pushed_back": len(losers),
-                "places_lost": sum(r["change"] for r in losers),
-                "safety_jobs_pushed_back": sum(r["safety_level"] > 0 for r in losers),
-                "worst": max(losers, key=lambda r: r["change"], default=None),
-            },
-        }
+                moved[h["direction"]] += 1
+        # "No listed fault fits" calls, emergency vs general: labelling remote faults general and town
+        # faults emergency would show here. Read from the call itself, so a re-read never drops one.
+        for call in w.tier_calls.values():
+            if call.fault_name in NO_FIT:
+                row(call.community)["no_fit_calls"][NO_FIT[call.fault_name]] += 1
+        return sorted(rows.values(), key=lambda c: (-c["oldest_days"], c["community"]))
 
 
 @app.post("/api/reset")

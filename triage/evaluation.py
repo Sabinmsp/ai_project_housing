@@ -38,15 +38,22 @@ class TierResult(BaseModel):
     flag: Reason | None
 
 
-def lookup_tier(taxonomy_match: Sequence[str]) -> TierResult:
+def lookup_tier(taxonomy_match: Sequence[str], *, coordinator_call: bool) -> TierResult:
     """Look up each matched fault in TIER_TABLE; several matches take the highest tier, flagged.
 
+    coordinator_call is True only for a coordinator's tier call; the model's matches pass False.
+    It has no default, so a caller must say which it is.
+
     Raises:
-        ValueError: a name is not in TIER_TABLE.
+        ValueError: a name is not in TIER_TABLE, or a coordinator-only name came from extraction.
     """
     unknown = [n for n in dict.fromkeys(taxonomy_match) if n not in TIER_TABLE]
     if unknown:
         raise ValueError(f"fault not in TIER_TABLE: {', '.join(map(repr, unknown))}")
+    # Invariant 2: the model never decides a tier, so it can't name a coordinator-only entry.
+    reserved = [n for n in dict.fromkeys(taxonomy_match) if TIER_TABLE[n].coordinator_only]
+    if reserved and not coordinator_call:
+        raise ValueError(f"coordinator-only repair type from extraction: {', '.join(map(repr, reserved))}")
     # Table order, not input order, so the same set of matches always gives the same result.
     matched = set(taxonomy_match)
     entries = tuple(e for name, e in TIER_TABLE.items() if name in matched)
@@ -241,7 +248,7 @@ def evaluate(facts: ExtractedFacts, unverified: Unverified) -> Evaluation:
     if not unverified <= spans:
         raise ValueError(f"unverified pairs are not quoted spans of this report: {sorted(unverified - spans)}")
 
-    tier = lookup_tier(facts.taxonomy_match)
+    tier = lookup_tier(facts.taxonomy_match, coordinator_call=False)
     tally = compute_tally(tier, facts, unverified)
     safety = compute_safety(facts, unverified)
     candidates = (*safety.flags, tier.flag, *tally.flags, mismatch_flag(facts, tier, unverified), unverified_flag(facts, unverified))

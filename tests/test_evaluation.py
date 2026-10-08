@@ -24,7 +24,7 @@ from triage.evaluation import (
     lookup_tier,
 )
 from triage.models import ExtractedFacts
-from triage.tiers import TIER_TABLE
+from triage.tiers import FAULT_NAMES, TIER_TABLE
 
 TOILET = "blocked or broken toilet"  # dangerous
 GAS = "gas leak"  # dangerous
@@ -33,23 +33,23 @@ FAN = "fan not working properly"  # standard
 
 
 def test_empty_has_no_tier_and_no_flag() -> None:
-    result = lookup_tier([])
+    result = lookup_tier([], coordinator_call=False)
     assert (result.entries, result.tier, result.flag) == ((), None, None)
 
 
 def test_single_dangerous() -> None:
-    result = lookup_tier([GAS])
+    result = lookup_tier([GAS], coordinator_call=False)
     assert result.entries == (TIER_TABLE[GAS],)
     assert (result.tier, result.flag) == ("dangerous", None)
 
 
 def test_single_standard() -> None:
-    result = lookup_tier([TAP])
+    result = lookup_tier([TAP], coordinator_call=False)
     assert (result.tier, result.flag) == ("standard", None)
 
 
 def test_mixed_tier_pair_takes_dangerous_and_flags() -> None:
-    result = lookup_tier([TAP, TOILET])
+    result = lookup_tier([TAP, TOILET], coordinator_call=False)
     assert result.tier == "dangerous"
     assert result.entries == (TIER_TABLE[TOILET], TIER_TABLE[TAP])  # table order, not input order
     assert result.flag == (
@@ -58,23 +58,24 @@ def test_mixed_tier_pair_takes_dangerous_and_flags() -> None:
 
 
 def test_same_tier_pair_still_flagged() -> None:
-    result = lookup_tier([TAP, FAN])
+    result = lookup_tier([TAP, FAN], coordinator_call=False)
     assert result.tier == "standard"
     assert result.flag is not None and TAP in result.flag and FAN in result.flag
 
 
 def test_duplicate_name_counted_once() -> None:
-    result = lookup_tier([GAS, GAS])
+    result = lookup_tier([GAS, GAS], coordinator_call=False)
     assert result.entries == (TIER_TABLE[GAS],)
     assert result.flag is None
 
 
 def test_unknown_name_raises_naming_it() -> None:
     with pytest.raises(ValueError, match="serious roof leak"):
-        lookup_tier([GAS, "serious roof leak"])
+        lookup_tier([GAS, "serious roof leak"], coordinator_call=False)
 
 
-names = st.sampled_from(list(TIER_TABLE))
+# What extraction can name: the public list only (coordinator-only entries are never matched).
+names = st.sampled_from(list(FAULT_NAMES))
 # Lists, not sets, so duplicates are exercised too.
 matches = st.lists(names, max_size=8)
 
@@ -83,24 +84,24 @@ matches = st.lists(names, max_size=8)
 def test_tier_is_highest_of_the_subset(match: list[str]) -> None:
     tiers = {TIER_TABLE[n].tier for n in match}
     expected = "dangerous" if "dangerous" in tiers else ("standard" if tiers else None)
-    assert lookup_tier(match).tier == expected
+    assert lookup_tier(match, coordinator_call=False).tier == expected
 
 
 @given(matches, st.randoms(use_true_random=False))
 def test_result_independent_of_input_order(match: list[str], rng: random.Random) -> None:
     shuffled = match[:]
     rng.shuffle(shuffled)
-    assert lookup_tier(shuffled) == lookup_tier(match)
+    assert lookup_tier(shuffled, coordinator_call=False) == lookup_tier(match, coordinator_call=False)
 
 
 @given(matches)
 def test_flag_iff_two_or_more_distinct_names(match: list[str]) -> None:
-    assert (lookup_tier(match).flag is not None) == (len(set(match)) >= 2)
+    assert (lookup_tier(match, coordinator_call=False).flag is not None) == (len(set(match)) >= 2)
 
 
 @given(matches)
 def test_every_candidate_named_in_flag(match: list[str]) -> None:
-    flag = lookup_tier(match).flag
+    flag = lookup_tier(match, coordinator_call=False).flag
     if flag is not None:
         assert all(f'"{n}"' in flag for n in match)
 
@@ -157,7 +158,7 @@ def facts(
 
 
 def tally(names: list[str], unverified: Unverified = frozenset(), **kw: bool) -> TallyResult:
-    return compute_tally(lookup_tier(names), facts(names, **kw), unverified)
+    return compute_tally(lookup_tier(names, coordinator_call=False), facts(names, **kw), unverified)
 
 
 def test_toilet_blocked_scores_4() -> None:
@@ -370,27 +371,27 @@ def assert_quotes_in(flag: str | None, *quotes: str) -> None:
 
 
 def test_over_on_standard_tier_flags() -> None:
-    flag = mismatch_flag(facts([TAP], mismatch=OVER), lookup_tier([TAP]), frozenset())
+    flag = mismatch_flag(facts([TAP], mismatch=OVER), lookup_tier([TAP], coordinator_call=False), frozenset())
     assert flag is not None and flag.startswith("Claim stronger than the report's own details")
     assert_quotes_in(flag, OVER[1], OVER[2])
 
 
 def test_under_on_dangerous_tier_flags() -> None:
-    flag = mismatch_flag(facts([SEWAGE], mismatch=UNDER), lookup_tier([SEWAGE]), frozenset())
+    flag = mismatch_flag(facts([SEWAGE], mismatch=UNDER), lookup_tier([SEWAGE], coordinator_call=False), frozenset())
     assert flag is not None and flag.startswith("Report plays down a fault on the repair-first list")
     assert_quotes_in(flag, UNDER[1], UNDER[2])
 
 
 def test_under_on_standard_tier_not_flagged() -> None:
-    assert mismatch_flag(facts([TAP], mismatch=UNDER), lookup_tier([TAP]), frozenset()) is None
+    assert mismatch_flag(facts([TAP], mismatch=UNDER), lookup_tier([TAP], coordinator_call=False), frozenset()) is None
 
 
 def test_under_with_no_tier_not_flagged() -> None:
-    assert mismatch_flag(facts([], mismatch=UNDER), lookup_tier([]), frozenset()) is None
+    assert mismatch_flag(facts([], mismatch=UNDER), lookup_tier([], coordinator_call=False), frozenset()) is None
 
 
 def test_no_mismatch_not_flagged() -> None:
-    assert mismatch_flag(facts([SEWAGE]), lookup_tier([SEWAGE]), frozenset()) is None
+    assert mismatch_flag(facts([SEWAGE]), lookup_tier([SEWAGE], coordinator_call=False), frozenset()) is None
 
 
 def test_one_unverified_span_flagged_with_its_quote() -> None:
@@ -438,7 +439,7 @@ def test_played_down_toilet_keeps_4_and_flags() -> None:
     mismatch = ("under", "nothing too bad", "toilet's blocked")
     result = evaluate(facts([TOILET], mismatch=mismatch, fault="toilet's blocked"), frozenset())
     assert result.tally.tally == 4
-    assert result.flags == (mismatch_flag(facts([TOILET], mismatch=mismatch), lookup_tier([TOILET]), frozenset()),)
+    assert result.flags == (mismatch_flag(facts([TOILET], mismatch=mismatch), lookup_tier([TOILET], coordinator_call=False), frozenset()),)
 
 
 def test_overclaimed_tap_scores_2_with_flag_and_no_safety() -> None:
@@ -458,7 +459,7 @@ def test_electrocute_claim_is_level_0_with_g5_flag() -> None:
 def test_ambiguous_drain_or_sewage_is_dangerous_and_flagged() -> None:
     result = evaluate(facts([DRAIN, SEWAGE], fault="could be blocked drain or sewage leak"), frozenset())
     assert result.tier.tier == "dangerous"
-    assert result.flags == (lookup_tier([DRAIN, SEWAGE]).flag,)
+    assert result.flags == (lookup_tier([DRAIN, SEWAGE], coordinator_call=False).flag,)
 
 
 def test_no_fault_named_raises() -> None:
@@ -499,7 +500,7 @@ def test_evaluate_flags_complete_never_blank_or_duplicated(
     flags = result.flags
     assert all(flag.strip() for flag in flags)
     assert len(flags) == len(set(flags))
-    tier = lookup_tier(f.taxonomy_match)
+    tier = lookup_tier(f.taxonomy_match, coordinator_call=False)
     components = {
         *compute_safety(f, unverified).flags,
         *compute_tally(tier, f, unverified).flags,
@@ -576,5 +577,32 @@ def test_g5_flag_quotes_the_verified_harm() -> None:
 
 def test_mismatch_flag_quotes_the_verified_claim() -> None:
     f = with_extra_span(facts([TAP], mismatch=OVER), "mismatch_claim", "worst leak ever")
-    flag = mismatch_flag(f, lookup_tier([TAP]), frozenset({("mismatch_claim", OVER[1])}))
+    flag = mismatch_flag(f, lookup_tier([TAP], coordinator_call=False), frozenset({("mismatch_claim", OVER[1])}))
     assert flag is not None and "'worst leak ever'" in flag and OVER[1] not in flag
+
+
+# --- coordinator-only "no listed fault fits" entries -------------------------------------------
+
+from triage.tiers import NO_FIT_EMERGENCY, NO_FIT_GENERAL  # noqa: E402
+
+
+@pytest.mark.parametrize("name", [NO_FIT_EMERGENCY, NO_FIT_GENERAL])
+def test_extraction_can_never_name_a_coordinator_only_entry(name: str) -> None:
+    with pytest.raises(ValueError, match="coordinator-only repair type from extraction"):
+        lookup_tier([name], coordinator_call=False)
+    with pytest.raises(ValueError, match="coordinator-only"):
+        lookup_tier([TOILET, name], coordinator_call=False)  # not even alongside a real match
+
+
+def test_coordinator_call_has_no_default() -> None:
+    with pytest.raises(TypeError):
+        lookup_tier([TOILET])  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize(("name", "base"), [(NO_FIT_EMERGENCY, 3), (NO_FIT_GENERAL, 2)])
+@pytest.mark.parametrize(("alternative", "bump"), [(False, 1), (True, 0)])
+def test_a_coordinator_no_fit_call_scores_its_base_plus_the_usual_bump(name, base, alternative, bump) -> None:
+    # The job's own facts are unlisted (empty taxonomy); the call supplies the tier.
+    tier = lookup_tier([name], coordinator_call=True)
+    result = compute_tally(tier, facts([], alternative=alternative), frozenset())
+    assert (result.base, result.bump, result.tally, result.winner) == (base, bump, base + bump, name)

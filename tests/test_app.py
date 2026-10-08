@@ -109,14 +109,6 @@ def test_decision_needs_a_note_and_completed_jobs_leave_the_queue(client):
     assert job["job_id"] in {j["job_id"] for j in q["completed"]}
 
 
-def test_fairness_view_compares_but_does_not_reorder(client):
-    ranked_before = [j["job_id"] for j in client.get("/api/queue").json()["ranked"]]
-    f = client.get("/api/fairness").json()
-    assert [r["job_id"] for r in f["what_if"]] == ranked_before
-    assert sorted(r["nearest_first_position"] for r in f["what_if"]) == list(range(1, len(ranked_before) + 1))
-    assert [j["job_id"] for j in client.get("/api/queue").json()["ranked"]] == ranked_before
-
-
 def test_signed_out_users_get_nothing(client):
     anon = TestClient(server.app)
     assert anon.get("/api/queue").status_code == 401
@@ -490,13 +482,18 @@ def test_a_job_with_no_arrival_time_is_reported_not_guessed(client):
         client.get("/api/queue")
 
 
-def test_fairness_counts_every_override_by_community_tag_and_direction(client):
+def _moved(c) -> dict:
+    """The Communities page's move counts, for communities where a coordinator moved a job."""
+    return {r["community"]: r["moved"] for r in c.get("/api/communities").json() if r["moved"]["jobs"]}
+
+
+def test_communities_counts_every_override_by_community_tag_and_direction(client):
     q = client.get("/api/queue").json()
     darwin, galiwinku = _job(q, "toilet", "Darwin"), _job(q, "toilet", "Galiwinku")
     _pin(client, darwin, 2, "access / road")
     client.delete(f"/api/jobs/{darwin['job_id']}/pin")
     _pin(client, galiwinku, 3, "other")
-    rows = {o["community"]: o for o in client.get("/api/fairness").json()["overrides"]}
+    rows = _moved(client)
     assert (rows["Darwin"]["jobs"], rows["Darwin"]["repins"]) == (1, 0) and (rows["Darwin"]["up"], rows["Darwin"]["down"]) == (1, 0)
     assert rows["Darwin"]["by_tag"]["access / road"] == 1 and sum(rows["Darwin"]["by_tag"].values()) == 1
     assert (rows["Galiwinku"]["up"], rows["Galiwinku"]["down"], rows["Galiwinku"]["by_tag"]["other"]) == (0, 1, 1)
@@ -531,7 +528,7 @@ def test_one_job_pinned_three_times_counts_as_one_job_and_two_re_pins(client):
     _pin(client, darwin, 2, "access / road")
     _pin(client, darwin, 3, "other")
     _pin(client, darwin, 2, "tenant contact")  # the latest pin decides tag and direction
-    rows = {o["community"]: o for o in client.get("/api/fairness").json()["overrides"]}
+    rows = _moved(client)
     assert set(rows) == {"Darwin"}
     assert (rows["Darwin"]["jobs"], rows["Darwin"]["repins"], rows["Darwin"]["up"], rows["Darwin"]["down"]) == (1, 2, 1, 0)
     assert {t: n for t, n in rows["Darwin"]["by_tag"].items() if n} == {"tenant contact": 1}
@@ -572,7 +569,7 @@ def test_stepping_three_places_then_saving_is_one_pin_and_no_re_pins(client):
     assert _pin(client, last, last["position"] - 3, "access / road").status_code == 200
     assert _job(client.get("/api/queue").json(), "toilet", "Nhulunbuy")["position"] == 3
     assert [h["event"] for h in server._workspace.pin_history] == ["pinned"]
-    row = next(o for o in client.get("/api/fairness").json()["overrides"] if o["community"] == "Nhulunbuy")
+    row = _moved(client)["Nhulunbuy"]
     assert (row["jobs"], row["repins"], row["up"]) == (1, 0, 1)
 
 
@@ -699,7 +696,8 @@ def test_tenant_sms_and_why_pass_through_unchanged(recorded):
     for job_id, job in w.jobs.items():
         detail = recorded.get(f"/api/jobs/{job_id}").json()
         assert detail["sms"] == tenant_sms(job)
-        assert detail["why"] == tenant_why(job, pinned=bool(rows.get(job_id) and rows[job_id].pinned))
+        assert detail["why"] == tenant_why(job, pinned=bool(rows.get(job_id) and rows[job_id].pinned),
+                                           classified_by_coordinator=job_id in w.tier_calls)
 
 
 def test_previous_calls_lists_every_call_newest_first_and_changes_nothing(client, officer):
@@ -742,7 +740,8 @@ def test_the_repair_list_is_grouped_and_names_each_source(client):
     rows = client.get("/api/reference").json()["repair_list"]
     assert {r["repair_type"] for r in rows} == {"Emergency", "General"}
     roof = next(r for r in rows if r["name"] == "roof leak")
-    assert roof == {"name": "roof leak", "repair_type": "Emergency", "sources": ["NT Residential Tenancies Act s63(2)(c)"]}
+    assert roof == {"name": "roof leak", "repair_type": "Emergency", "coordinator_only": False,
+                    "sources": ["NT Residential Tenancies Act s63(2)(c)"]}
     assert "group('Emergency repairs', 'Emergency') + group('General repairs', 'General')" in _js_function("repairOptions")
 
 
@@ -901,3 +900,138 @@ def test_an_nt_gov_au_only_emergency_row_is_called_guidance_not_law(empty):
     box = empty.get(f"/api/jobs/{job['job_id']}").json()["why_here"]
     assert "Emergency repair in NT Government repairs guidance (nt.gov.au)." in box
     assert not any("NT law" in line for line in box)
+
+
+# ---- Coordinator-only "no listed fault fits" repair types -----------------------------------
+
+NO_FIT_EMERGENCY, NO_FIT_GENERAL = server.NO_FIT_EMERGENCY, server.NO_FIT_GENERAL
+NEVER_CITED = ("NT law", "Residential Tenancies", "nt.gov.au", "Act s63", "NT Government")
+
+
+def _call(c, job_id: str, name: str, reason: str = "Cooling unit, nothing on the lists fits"):
+    return c.post(f"/api/jobs/{job_id}/tier", json={"fault_name": name, "reason": reason})
+
+
+@pytest.mark.parametrize(("name", "repair", "tally"), [(NO_FIT_EMERGENCY, "Emergency", 4), (NO_FIT_GENERAL, "General", 3)])
+def test_a_no_fit_call_scores_its_base_plus_bump_and_cites_no_authority(client, name, repair, tally):
+    fan = client.get("/api/queue").json()["review_band"][0]
+    assert _call(client, fan["job_id"], name).status_code == 200
+    row = next(j for j in client.get("/api/queue").json()["ranked"] if j["job_id"] == fan["job_id"])
+    assert (row["urgency_tally"], row["severity_bump"]) == (tally, 1)  # base 3 or 2, +1 no alternative mentioned
+    line = f"Coordinator's call: {repair} repair — no listed fault fits. Reason: Cooling unit, nothing on the lists fits."
+    detail = client.get(f"/api/jobs/{fan['job_id']}").json()
+    assert row["reason"] == line and line in detail["why_here"]
+    working = next(r for r in detail["trace"] if r["label"] == "Coordinator's call")
+    assert working["value"] == line
+    assert next(r for r in detail["trace"] if r["label"] == "Repair list match")["value"] == "none — coordinator's call"
+    shown = " ".join([row["reason"], *detail["why_here"], *detail["flags"]] + [f"{r['value']} {r['note']}" for r in detail["trace"]])
+    for word in NEVER_CITED:
+        assert word not in shown, word
+    # No list entry, so no trade: the coordinator chooses one, as for any unlisted fault.
+    assert (detail["logistics"]["needed_trades"], detail["logistics"]["trade_source"]) == ([], None)
+
+
+def test_extraction_naming_a_coordinator_only_entry_is_rejected_not_scored(empty):
+    class NamesNoFit(_Offline):
+        def complete_json(self, system, user, schema):
+            data = json.loads(super().complete_json(system, user, schema))
+            data["faults"][0]["taxonomy_match"] = [NO_FIT_EMERGENCY]
+            return json.dumps(data)
+
+    server._workspace.client = NamesNoFit()
+    body = _report_file("T-40", "Darwin", "2026-09-20 09:00", "toilet blocked").encode()
+    rep = empty.post("/api/reports/upload", files={"file": ("x.txt", body, "text/plain")}).json()["reports"][0]
+    assert rep["stage2"]["status"] != "ok" and rep["jobs"] == []
+
+
+def test_communities_counts_no_fit_calls_per_community_emergency_vs_general(client):
+    # Town labelled emergency, remote labelled general: the pattern must be visible side by side.
+    # The offline reader leaves a wobbling fan unlisted (as in the fixture's Maningrida report).
+    body = _report_file("T-41", "Darwin", "2026-09-23 09:00", "the ceiling fan wobbles and makes a noise").encode()
+    town = client.post("/api/reports/upload", files={"file": ("ac.txt", body, "text/plain")}).json()["reports"][0]["jobs"][0]
+    remote = next(j for j in client.get("/api/queue").json()["review_band"] if j["community"] == "Maningrida")
+    body = _report_file("T-42", "Wadeye", "2026-09-24 09:00", "the ceiling fan wobbles and makes a noise").encode()
+    other = client.post("/api/reports/upload", files={"file": ("fan.txt", body, "text/plain")}).json()["reports"][0]["jobs"][0]
+    assert _call(client, town["job_id"], NO_FIT_EMERGENCY).status_code == 200
+    assert _call(client, remote["job_id"], NO_FIT_GENERAL).status_code == 200
+    assert _call(client, other["job_id"], "fan not working properly").status_code == 200  # a list entry, not a no-fit call
+    rows = {r["community"]: r["no_fit_calls"] for r in client.get("/api/communities").json()}
+    assert rows["Darwin"] == {"emergency": 1, "general": 0}
+    assert rows["Maningrida"] == {"emergency": 0, "general": 1}
+    assert all(v == {"emergency": 0, "general": 0} for k, v in rows.items() if k not in ("Darwin", "Maningrida"))
+    calls = client.get("/api/tier-calls").json()
+    assert {c["job_id"]: c["no_fit"] for c in calls} == {town["job_id"]: True, remote["job_id"]: True, other["job_id"]: False}
+
+
+def test_the_no_fit_options_come_last_in_their_groups_and_cite_nothing():
+    options = _js_function("repairOptions")
+    assert "None of these fit — treat as ${esc(e.repair_type)}" in options
+    assert "...list.filter(e => e.repair_type === type && !e.coordinator_only)," in options
+    assert "...list.filter(e => e.repair_type === type && e.coordinator_only)]" in options
+    no_fit = options[options.index("e.coordinator_only\n    ?"):options.index(":", options.index("e.coordinator_only\n    ?"))]
+    assert "sources" not in no_fit
+
+
+def test_the_reference_list_marks_the_coordinator_only_entries(client):
+    rows = {r["name"]: r for r in client.get("/api/reference").json()["repair_list"]}
+    assert {n for n, r in rows.items() if r["coordinator_only"]} == {NO_FIT_EMERGENCY, NO_FIT_GENERAL}
+    assert rows[NO_FIT_EMERGENCY]["repair_type"] == "Emergency" and rows[NO_FIT_GENERAL]["repair_type"] == "General"
+    assert client.get("/api/reference").json()["fault_names"] == list(server.FAULT_NAMES)
+
+
+def test_the_fairness_monitor_and_its_nearest_first_comparison_are_gone(client):
+    assert client.get("/api/fairness").status_code == 404
+    assert "renderFairness" not in APP_JS and "Fairness Monitor" not in APP_JS and "nearest-first" not in APP_JS.lower()
+    rows = client.get("/api/communities").json()
+    assert rows and all(set(r) == {"community", "open", "safety", "review_band", "oldest_days", "distance",
+                                   "moved", "no_fit_calls"} for r in rows)
+    assert not any("fairness" in json.dumps(r).lower() or "score" in json.dumps(r).lower() for r in rows)
+
+
+def test_a_no_fit_call_still_counts_after_a_re_read_replaces_its_job(client):
+    fan = next(j for j in client.get("/api/queue").json()["review_band"] if j["community"] == "Maningrida")
+    assert _call(client, fan["job_id"], NO_FIT_GENERAL).status_code == 200
+    assert server._workspace.tier_calls[fan["job_id"]].community == "Maningrida"
+
+    class Splits(_Offline):  # the follow-up re-read finds two faults, so the job gets new ids
+        def complete_json(self, system, user, schema):
+            text = report_text_from_prompt(user)
+            if "sparking" not in text:
+                return super().complete_json(system, user, schema)
+            fan_, sparks = self.read("the ceiling fan wobbles").model_dump(), self.read("sparking").model_dump()
+            return json.dumps({**fan_, "faults": fan_["faults"] + sparks["faults"]})
+
+    server._workspace.client = Splits()
+    client.post(f"/api/jobs/{fan['job_id']}/followup", json={"text": "and the power point is sparking"})
+    assert fan["job_id"] not in server._workspace.jobs
+    rows = {r["community"]: r["no_fit_calls"] for r in client.get("/api/communities").json()}
+    assert rows["Maningrida"] == {"emergency": 0, "general": 1}
+
+
+def test_calls_saved_before_community_was_stored_take_it_from_the_report(tmp_path):
+    db = str(tmp_path / "fairfix.db")
+    server._workspace = server.Workspace(db_path=db, client=_Offline())
+    c = TestClient(server.app)
+    c.post("/api/login", json={"username": "admin", "password": "Admin1!"})
+    for name, fields in REPORTS.items():
+        c.post("/api/reports/upload", files={"file": (name, _report_file(*fields).encode(), "text/plain")})
+    fan = c.get("/api/queue").json()["review_band"][0]
+    _call(c, fan["job_id"], NO_FIT_EMERGENCY)
+    state = server._workspace.repo.load_state()
+    old = {k: {f: v[f] for f in ("fault_name", "reason", "by", "at")} for k, v in state["tier_calls"].items()}
+    server._workspace.repo.save_state({"tier_calls": old})  # the shape saved by the previous version
+    server._workspace = server.Workspace(db_path=db, client=_Offline())
+    assert server._workspace.tier_calls[fan["job_id"]].community == "Maningrida"
+    server._workspace = None
+
+
+def test_a_repair_type_call_is_frozen_and_needs_its_community():
+    fields = {"fault_name": NO_FIT_GENERAL, "reason": "x", "by": "Admin",
+              "at": "2026-10-01T09:00:00+09:30", "community": "Wadeye"}
+    from pydantic import ValidationError
+    call = server.TierCall.model_validate(fields)
+    with pytest.raises(ValidationError):
+        call.community = "Darwin"
+    for bad in ({k: v for k, v in fields.items() if k != "community"}, {**fields, "note": "x"}):
+        with pytest.raises(ValidationError):
+            server.TierCall.model_validate(bad)

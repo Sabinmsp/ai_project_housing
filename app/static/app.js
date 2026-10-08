@@ -14,7 +14,6 @@ const NAV = {
     ['requests', 'Repair Requests', 'file-text'],
     ['queue', 'Priority Queue', 'list-ordered'],
     ['communities', 'Communities', 'map'],
-    ['fairness', 'Fairness Monitor', 'scale'],
     ['tradies', 'Tradies', 'hard-hat'],
     ['reports', 'Reports', 'chart-column'],
   ],
@@ -35,13 +34,16 @@ const refreshIcons = () => { applyTips(); return window.lucide && lucide.createI
 
 const TH_TIPS = {
   'Assigned jobs': 'Jobs this tradie has been sent to', Availability: 'Whether this tradie can be assigned now',
-  Change: 'Places a job would move if the queue were sorted nearest-first', Community: 'Where the home is',
+  Community: 'Where the home is',
+  'Jobs moved': 'Jobs a coordinator moved in the queue, counted once each', 'Moved again': 'Extra moves of a job already moved',
+  'Up / down': 'Moves up and moves down, from each job\'s latest move', 'Move reasons': 'The reason tags chosen for those moves',
+  'No-fit calls: emergency / general': '"No listed fault fits" calls a coordinator made, as emergency or general',
   Distance: 'Straight line to the nearest housing office — never changes the order', 'Home base': 'Where the tradie is based',
-  Issue: 'The fault, in the report\'s own words', Name: 'Tradie name', 'Nearest-first': 'Place if sorted nearest-first (comparison only)',
+  Issue: 'The fault, in the report\'s own words', Name: 'Tradie name',
   'Needs a decision': 'Jobs not on the NT repair lists, waiting for a coordinator to choose the repair type',
   'Oldest waiting': 'Longest any open job here has waited', 'Open jobs': 'Jobs not yet completed', Phone: 'Tradie phone number',
   Priority: 'Label for the queue place: safety first, then repair type and loss of use', Progress: 'Where the report is up to',
-  Rank: 'Place in the queue', Real: 'Place in the real queue', Reference: 'Job or report reference',
+  Rank: 'Place in the queue', Reference: 'Job or report reference',
   'Repair type': 'Emergency or general, from the NT repair lists', Report: 'The text as recorded',
   'Safety jobs': 'Open jobs where the report describes a safety risk', Status: 'Open, assigned to a tradie, or completed',
   Submitted: 'When you recorded it', 'To nearest office': 'Straight line to the nearest housing office',
@@ -396,41 +398,25 @@ async function renderQueue() {
   linkRows();
 }
 
-// ---- Admin: communities and fairness ------------------------------------------------------
+// ---- Admin: communities --------------------------------------------------------------------
 
 async function renderCommunities() {
-  setHead('Communities', 'Who is waiting where. Use this to plan trips, not to reorder the queue.');
-  const f = await api('/api/fairness');
+  setHead('Communities', 'Who is waiting where, and what coordinators changed by hand. Use this to plan trips, not to reorder the queue.');
+  const rows = await api('/api/communities');
+  const tags = m => Object.entries(m.by_tag).filter(([, n]) => n).map(([t, n]) => `${esc(t)} ${n}`).join(' · ') || '<span class="text-slate-400">—</span>';
+  const zero = n => n ? n : '<span class="text-slate-400">0</span>';
   page().innerHTML = card('', tableWrap(
-    '<th>Community</th><th>To nearest office</th><th class="text-right">Open jobs</th><th class="text-right">Safety jobs</th><th class="text-right">Needs a decision</th><th>Oldest waiting</th>',
-    f.communities.map(c => `<tr><td class="font-medium">${esc(c.community)}</td><td class="text-slate-500">${dist(c.distance)}</td>
+    '<th>Community</th><th>To nearest office</th><th class="text-right">Open jobs</th><th class="text-right">Safety jobs</th><th class="text-right">Needs a decision</th><th>Oldest waiting</th>'
+    + '<th class="text-right">Jobs moved</th><th class="text-right">Moved again</th><th class="text-right">Up / down</th><th>Move reasons</th><th class="text-right">No-fit calls: emergency / general</th>',
+    rows.map(c => `<tr><td class="font-medium">${esc(c.community)}</td><td class="text-slate-500">${dist(c.distance)}</td>
       <td class="text-right tabular-nums">${c.open}</td><td class="text-right">${c.safety ? `<span class="badge b-critical" title="Open jobs where the report describes a safety risk">${c.safety}</span>` : '<span class="text-slate-400">0</span>'}</td>
       <td class="text-right tabular-nums">${c.review_band}</td>
-      <td>${c.oldest_days >= 14 ? `<span class="badge b-high" title="Waiting two weeks or more">${waiting(c.oldest_days)}</span>` : waiting(c.oldest_days)}</td></tr>`).join(''),
-    'No open jobs.', 6), { pad: false });
-}
-
-async function renderFairness() {
-  setHead('Fairness Monitor', 'What an "efficient" nearest-first queue would do, compared with the real one.');
-  const f = await api('/api/fairness');
-  const s = f.summary;
-  page().innerHTML = `
-    <div class="mb-4 flex items-start gap-2 rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900">${icon('scale', 'mt-0.5 size-4 shrink-0')}
-      <p>The real queue is ordered by <b>safety → repair type and loss of use → oldest report</b>. Distance is not in the sort key, so a remote tenant can't be pushed back for being far away. The table shows what would happen if it were.</p></div>
-    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      ${stat('Jobs pushed back', s.jobs_pushed_back, 'if sorted nearest-first', 'arrow-down', 'text-red-500')}
-      ${stat('Places lost', s.places_lost, 'in total across those jobs', 'list-ordered')}
-      ${stat('Safety jobs pushed back', s.safety_jobs_pushed_back, 'jobs with a safety risk', 'shield-alert', 'text-red-500')}
-      ${stat('Worst case', s.worst ? `#${s.worst.position} → #${s.worst.nearest_first_position}` : '—', s.worst ? `${esc(s.worst.community)}: ${esc(s.worst.fault).slice(0, 48)}` : '', 'map-pin')}
-    </div>
-    <div class="mt-4">${card('Real queue vs nearest-first', tableWrap(
-      '<th>Reference</th><th>Community</th><th>Issue</th><th>Priority</th><th>To nearest office</th><th class="text-right">Real</th><th class="text-right">Nearest-first</th><th class="text-right">Change</th>',
-      f.what_if.map(r => `<tr class="row-link" data-job="${esc(r.job_id)}"><td>${ref(r.job_id)}</td><td>${esc(r.community)}</td>
-        <td class="max-w-[280px] truncate" title="${esc(r.fault)}">${esc(r.fault)}</td><td>${priorityBadge(r)}</td><td class="text-slate-500">${dist(r.distance)}</td>
-        <td class="text-right font-medium tabular-nums">${r.position}</td><td class="text-right tabular-nums text-slate-500">${r.nearest_first_position}</td>
-        <td class="text-right tabular-nums">${r.change > 0 ? `<span class="font-medium text-red-600">↓ ${r.change}</span>` : r.change < 0 ? `<span class="text-emerald-600">↑ ${-r.change}</span>` : '<span class="text-slate-400">—</span>'}</td></tr>`).join(''),
-      'No ranked jobs.', 8), { desc: 'A comparison only. The real queue never does this.', pad: false })}</div>`;
-  linkRows();
+      <td>${c.oldest_days >= 14 ? `<span class="badge b-high" title="Waiting two weeks or more">${waiting(c.oldest_days)}</span>` : waiting(c.oldest_days)}</td>
+      <td class="text-right tabular-nums">${zero(c.moved.jobs)}</td><td class="text-right tabular-nums">${zero(c.moved.repins)}</td>
+      <td class="text-right tabular-nums">${c.moved.up} / ${c.moved.down}</td><td class="text-xs text-slate-600">${tags(c.moved)}</td>
+      <td class="text-right tabular-nums">${c.no_fit_calls.emergency} / ${c.no_fit_calls.general}</td></tr>`).join(''),
+    'No open jobs.', 11), { pad: false,
+      desc: 'Moves and "no listed fault fits" calls are human choices, so they are counted here: a pattern by community is for the coordinator to see.' });
 }
 
 // ---- Admin: reports ----------------------------------------------------------------------
@@ -485,9 +471,13 @@ function tradieOption(t, assignedId) {
 const ORDER_LINE = 'Safety risks go first. Then jobs are ordered by the type of repair and whether the household has lost the use of it completely. When jobs are level, the earlier report goes first.';
 
 // Grouped, each with its authority. No option is ever pre-selected (master §5.1: never a rubber stamp).
+// The two coordinator-only "no listed fault fits" entries go last in their group and cite no source.
 function repairOptions(list) {
-  const group = (label, type) => `<optgroup label="${label}">${list.filter(e => e.repair_type === type)
-    .map(e => `<option value="${esc(e.name)}">${esc(e.name)} — ${esc(e.sources.join('; '))}</option>`).join('')}</optgroup>`;
+  const option = e => e.coordinator_only
+    ? `<option value="${esc(e.name)}">None of these fit — treat as ${esc(e.repair_type)}</option>`
+    : `<option value="${esc(e.name)}">${esc(e.name)} — ${esc(e.sources.join('; '))}</option>`;
+  const group = (label, type) => `<optgroup label="${label}">${[...list.filter(e => e.repair_type === type && !e.coordinator_only),
+    ...list.filter(e => e.repair_type === type && e.coordinator_only)].map(option).join('')}</optgroup>`;
   return group('Emergency repairs', 'Emergency') + group('General repairs', 'General');
 }
 
@@ -495,7 +485,7 @@ function repairOptions(list) {
 function previousCalls(calls) {
   return `<div class="mt-4 border-t border-slate-100 pt-3"><h3 class="text-sm font-medium">Previous calls</h3>
     ${calls.length ? `<ol class="mt-2 space-y-2">${calls.map(c => `<li class="text-sm">
-      <div>${c.job_open ? `"${esc(c.fault)}"` : '<span class="text-slate-400">job no longer open</span>'} → treated like <b>${esc(c.treated_like)}</b> (${esc(c.repair_type)})</div>
+      <div>${c.job_open ? `"${esc(c.fault)}"` : '<span class="text-slate-400">job no longer open</span>'} → ${c.no_fit ? `no listed fault fits, treated as <b>${esc(c.repair_type)}</b>` : `treated like <b>${esc(c.treated_like)}</b> (${esc(c.repair_type)})`}</div>
       <div class="text-xs text-slate-500">${esc(c.by)} · ${new Date(c.at).toLocaleDateString()} — ${esc(c.reason)}</div></li>`).join('')}</ol>`
       : '<p class="mt-1 text-sm text-slate-500">None yet.</p>'}</div>`;
 }
@@ -860,7 +850,7 @@ function renderHow() {
 
 const PAGES = {
   dashboard: renderDashboard, requests: renderRequests, queue: renderQueue, communities: renderCommunities,
-  fairness: renderFairness, tradies: renderTradies, reports: renderReports, new: renderIntake, mine: renderMine, how: renderHow,
+  tradies: renderTradies, reports: renderReports, new: renderIntake, mine: renderMine, how: renderHow,
 };
 
 async function route() {
