@@ -43,7 +43,7 @@ Needs **Python 3.10 or newer** (3.12 is what CI uses).
 ```bash
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-export TRIAGE_MODEL=anthropic/claude-sonnet-5.5   # needed to replay the recorded answers (no key)
+# Paid API key included with rate limits
 python -m app.server                              # web app: http://127.0.0.1:8040
 python demo.py                                    # or the command line
 ```
