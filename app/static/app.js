@@ -30,7 +30,38 @@ function esc(v = '') {
   return String(v ?? '').replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c]));
 }
 const icon = (name, cls = 'size-4') => `<i data-lucide="${name}" class="${cls}"></i>`;
-const refreshIcons = () => window.lucide && lucide.createIcons({ attrs: { 'stroke-width': 1.75 } });
+// Runs after every render: draws icons and gives each header and badge its one-line tooltip.
+const refreshIcons = () => { applyTips(); return window.lucide && lucide.createIcons({ attrs: { 'stroke-width': 1.75 } }); };
+
+const TH_TIPS = {
+  'Assigned jobs': 'Jobs this tradie has been sent to', Availability: 'Whether this tradie can be assigned now',
+  Change: 'Places a job would move if the queue were sorted nearest-first', Community: 'Where the home is',
+  Distance: 'Straight line to the nearest housing office — never changes the order', 'Home base': 'Where the tradie is based',
+  Issue: 'The fault, in the report\'s own words', Name: 'Tradie name', 'Nearest-first': 'Place if sorted nearest-first (comparison only)',
+  'Needs a decision': 'Jobs not on the NT repair lists, waiting for a coordinator to choose the repair type',
+  'Oldest waiting': 'Longest any open job here has waited', 'Open jobs': 'Jobs not yet completed', Phone: 'Tradie phone number',
+  Priority: 'Label for the queue place: safety first, then repair type and loss of use', Progress: 'Where the report is up to',
+  Rank: 'Place in the queue', Real: 'Place in the real queue', Reference: 'Job or report reference',
+  'Repair type': 'Emergency or general, from the NT repair lists', Report: 'The text as recorded',
+  'Safety jobs': 'Open jobs where the report describes a safety risk', Status: 'Open, assigned to a tradie, or completed',
+  Submitted: 'When you recorded it', 'To nearest office': 'Straight line to the nearest housing office',
+  Trades: 'Trades this tradie is listed for', Waiting: 'Days since the tenant reported it',
+};
+const BADGE_TIPS = {
+  Emergency: 'An emergency repair on the NT repair lists', General: 'A general repair on the NT repair lists',
+  'Not on the repair lists': 'This fault isn\'t on the NT repair lists', 'Choose repair type': 'A coordinator needs to choose how to treat it',
+  'No safety risk described': 'The report describes no safety risk', 'Possible safety risk': 'The report describes a possible safety risk',
+  'Safety risk now': 'The report describes a safety risk now', Open: 'Not yet sent to a tradie', Completed: 'The repair is done',
+  Assigned: 'This tradie is sent to the job', Recommended: 'Suggested for this job only — it never changes the order',
+  'In report': 'This quote was found word for word in the report', 'Not in report': 'This quote isn\'t in the report, so it is ignored',
+  Read: 'Read automatically and placed', "Couldn't read automatically": 'A person needs to read this report',
+  'With coordinator': 'Waiting for the coordinator', 'With the coordinator': 'Waiting for the coordinator',
+  'Saved model answers': 'Reports already read are replayed from saved answers', AI: 'This step uses a language model', Code: 'This step is plain code',
+};
+function applyTips() {
+  $$('th').forEach(th => { const t = TH_TIPS[th.textContent.trim()]; if (t && !th.title) th.title = t; });
+  $$('.badge').forEach(b => { const t = BADGE_TIPS[b.textContent.trim()] || PRIORITY_TIP[b.textContent.trim()]; if (t && !b.title) b.title = t; });
+}
 const tip = (inner, text) => `<span class="tip inline-flex" tabindex="0">${inner}<span class="tip-text">${esc(text)}</span></span>`;
 
 function toast(msg) {
@@ -95,33 +126,34 @@ const tableWrap = (head, rows, empty, cols) => `<div class="overflow-x-auto"><ta
 // ---- labels (display only: the order always comes from the server) -----------------
 
 function priorityOf(j) {
-  if (j.in_review_band) return 'Needs review';
+  if (j.in_review_band) return 'Needs a decision';
   if (j.safety_level === 2) return 'Critical';
   if (j.safety_level === 1 || j.urgency_tally === 4) return 'High';
   if (j.urgency_tally === 3) return 'Medium';
-  if (j.urgency_tally === 2) return 'Low';
-  return 'Needs review';
+  if (j.urgency_tally === 2) return 'Routine';
+  return 'Needs a decision';
 }
-const PRIORITY_CLASS = { Critical: 'b-critical', High: 'b-high', Medium: 'b-medium', Low: 'b-low', 'Needs review': 'b-review' };
+const PRIORITY_CLASS = { Critical: 'b-critical', High: 'b-high', Medium: 'b-medium', Routine: 'b-low', 'Needs a decision': 'b-review' };
 const PRIORITY_TIP = {
-  Critical: 'Active safety risk described in the report',
-  High: 'Possible safety risk, or an emergency repair with no working alternative',
-  Medium: 'Listed repair, one point lower (e.g. another working one named)',
-  Low: 'General repair',
-  'Needs review': 'Not on the fault list: waiting for a coordinator tier call',
+  Critical: 'The report describes a safety risk now',
+  High: 'A possible safety risk, or an emergency repair that is a full loss of use',
+  Medium: 'An emergency repair that is not a full loss of use, or a general repair that is',
+  Routine: 'A general repair that is not a full loss of use',
+  'Needs a decision': 'Not on the NT repair lists: a coordinator needs to choose its repair type',
 };
 const priorityBadge = j => tip(`<span class="badge ${PRIORITY_CLASS[priorityOf(j)]}">${priorityOf(j)}</span>`, PRIORITY_TIP[priorityOf(j)]);
 
-const categoryBadge = j => j.tier === 'dangerous'
-  ? tip('<span class="badge b-outline">Emergency</span>', 'Emergency repair (NT Residential Tenancies Act s63)')
-  : j.tier === 'standard' ? '<span class="badge b-outline">General</span>'
-  : tip('<span class="badge b-outline text-slate-400">Unlisted</span>', 'Not on the fault list');
+const REPAIR_TYPE = { dangerous: 'Emergency', standard: 'General' };
+const categoryBadge = j => j.tier ? `<span class="badge b-outline">${REPAIR_TYPE[j.tier]}</span>`
+  : '<span class="badge b-outline text-slate-400">Not on the repair lists</span>';
 
-const statusBadge = j => j.status === 'Assigned' ? `<span class="badge b-accent">${icon('user-check', 'size-3')}${esc(j.tradie)}</span>`
+const statusBadge = j => j.status === 'Assigned' ? `<span class="badge b-accent" title="Assigned tradie">${icon('user-check', 'size-3')}${esc(j.tradie)}</span>`
   : j.status === 'Completed' ? '<span class="badge b-ok">Completed</span>' : '<span class="badge b-outline">Open</span>';
 
-const safetyText = j => ['No safety risk', 'Possible safety risk', 'Active safety risk'][j.safety_level];
+const safetyText = j => ['No safety risk described', 'Possible safety risk', 'Safety risk now'][j.safety_level];
 const waiting = d => `${d} day${d === 1 ? '' : 's'}`;
+// A date-only report shows the date alone: midnight would be a time nobody reported.
+const reportedAt = (iso, dateOnly) => dateOnly ? new Date(iso).toLocaleDateString() : new Date(iso).toLocaleString();
 // Stage 5: straight-line km to the nearest NT housing office (display only, never ordering).
 const dist = d => !d || d.km == null ? '<span class="text-slate-400">unknown</span>'
   : `<span title="Straight line to the ${esc(d.office)}">${Math.round(d.km)} km</span>`;
@@ -164,7 +196,7 @@ function navHtml() {
       <span class="text-sm font-semibold">FairFix NT</span></div>
     <nav class="flex-1 space-y-0.5 p-3" aria-label="Main navigation">${items}</nav>
     <div class="space-y-2 border-t border-slate-200 p-3 text-xs text-slate-500">
-      <div class="rounded-md bg-slate-50 p-2.5"><div class="font-medium text-slate-700">Queue order</div>Safety → urgency → oldest report. Distance is never used.</div>
+      <div class="rounded-md bg-slate-50 p-2.5"><div class="font-medium text-slate-700">Queue order</div>Safety → repair type and loss of use → oldest report. Distance is never used.</div>
       <div class="flex items-center gap-2 px-1">${icon('phone', 'size-3.5')}Repairs hotline <span class="font-medium text-slate-700">1800 104 076</span></div>
     </div>`;
 }
@@ -247,19 +279,19 @@ async function renderDashboard() {
 
   page().innerHTML = `
     <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      ${stat('Open requests', open.length + q.needs_human.length, `${q.ranked.length} ranked · ${q.review_band.length} in review · ${q.needs_human.length} need a read`, 'inbox')}
-      ${stat('Critical', count('Critical'), 'Active safety risk described', 'shield-alert', 'text-red-500')}
-      ${stat('High priority', count('High'), 'Possible safety risk or emergency repair', 'triangle-alert', 'text-amber-500')}
+      ${stat('Open requests', open.length + q.needs_human.length, `${q.ranked.length} in the queue · ${q.review_band.length} need a decision · ${q.needs_human.length} couldn't read automatically`, 'inbox')}
+      ${stat('Critical', count('Critical'), 'Safety risk now described', 'shield-alert', 'text-red-500')}
+      ${stat('High priority', count('High'), 'Possible safety risk, or emergency repair with a full loss of use', 'triangle-alert', 'text-amber-500')}
       ${stat('Tradie matches', tradieMatches(open, tradies), 'Unassigned jobs with an available, qualified tradie', 'user-check', 'text-teal-600')}
     </div>
     <div class="mt-4 grid gap-4 lg:grid-cols-3">
       <div class="min-w-0 lg:col-span-2">${card('Priority queue', tableWrap(
-        '<th class="w-12">Rank</th><th>Reference</th><th>Community</th><th>Issue</th><th>Priority</th><th>NT category</th><th>Status</th>',
+        '<th class="w-12">Rank</th><th>Reference</th><th>Community</th><th>Issue</th><th>Priority</th><th>Repair type</th><th>Status</th>',
         top.map(j => `<tr class="row-link" data-job="${esc(j.job_id)}"><td class="font-medium text-slate-500">${j.position}</td><td>${ref(j.job_id)}</td>
           <td>${esc(j.community)}</td><td class="max-w-[200px] truncate" title="${esc(j.fault)}">${esc(j.fault)}</td>
           <td>${priorityBadge(j)}</td><td>${categoryBadge(j)}</td><td>${statusBadge(j)}</td></tr>`).join(''),
         'No ranked jobs.', 7),
-        { desc: 'Next in line: safety first, then urgency, then oldest report.', pad: false,
+        { desc: 'Next in line: safety first, then repair type and loss of use, then oldest report.', pad: false,
           action: `<a href="#/queue" class="btn btn-ghost btn-sm">View all ${icon('arrow-up-right', 'size-3.5')}</a>` })}</div>
       <div class="space-y-4">
         ${card('Workload', `
@@ -270,9 +302,9 @@ async function renderDashboard() {
           <div class="kv"><span class="flex items-center gap-2 text-slate-600">${icon('check', 'size-4 text-slate-400')}Available now</span><span class="font-semibold">${tradies.filter(t => t.available).length}</span></div>`,
           { action: `<a href="#/tradies" class="btn btn-ghost btn-sm">Tradies</a>` })}
         ${card('Needs attention', `
-          <a href="#/requests" data-tab="read" class="kv rounded-md hover:text-teal-700"><span class="text-slate-600">Need a human read</span><span class="badge ${q.needs_human.length ? 'b-critical' : 'b-outline'}">${q.needs_human.length}</span></a>
+          <a href="#/requests" data-tab="read" class="kv rounded-md hover:text-teal-700"><span class="text-slate-600">Couldn't read automatically</span><span class="badge ${q.needs_human.length ? 'b-critical' : 'b-outline'}" title="Reports a person needs to read">${q.needs_human.length}</span></a>
           <div class="h-px bg-slate-100"></div>
-          <a href="#/requests" data-tab="review" class="kv rounded-md hover:text-teal-700"><span class="text-slate-600">Waiting for a tier call</span><span class="badge ${q.review_band.length ? 'b-review' : 'b-outline'}">${q.review_band.length}</span></a>`)}
+          <a href="#/requests" data-tab="review" class="kv rounded-md hover:text-teal-700"><span class="text-slate-600">Needs a decision</span><span class="badge ${q.review_band.length ? 'b-review' : 'b-outline'}" title="Jobs waiting for a repair type">${q.review_band.length}</span></a>`)}
       </div>
     </div>`;
   $$('[data-tab]').forEach(a => a.onclick = () => { state.tab = a.dataset.tab; });
@@ -294,7 +326,7 @@ async function renderRequests() {
     ...q.ranked.map(j => ({ ...j, kind: j.status === 'Assigned' ? 'assigned' : 'ranked' })),
     ...q.completed.map(j => ({ ...j, kind: 'completed' })),
   ];
-  const tabs = [['all', 'All'], ['read', 'Needs a read'], ['review', 'Review band'], ['ranked', 'Open'], ['assigned', 'Assigned'], ['completed', 'Completed']];
+  const tabs = [['all', 'All'], ['read', "Couldn't read automatically"], ['review', 'Needs a decision'], ['ranked', 'Open'], ['assigned', 'Assigned'], ['completed', 'Completed']];
   const n = k => k === 'all' ? rows.length : rows.filter(r => r.kind === k).length;
   const shown = rows.filter(r => (state.tab === 'all' || r.kind === state.tab) && matches(r));
 
@@ -306,7 +338,7 @@ async function renderRequests() {
       shown.map(r => r.kind === 'read'
         ? `<tr><td>${ref(r.report_id, false)}<div class="text-xs text-slate-400">${esc(r.source_file || '')}${r.source_item ? ' · item ' + r.source_item : ''}</div></td><td>${esc(r.community)}</td>
             <td class="max-w-[360px]"><div class="truncate" title="${esc(r.raw_text)}">${esc(r.raw_text)}</div><div class="text-xs text-red-600">${esc(r.reason)}</div></td>
-            <td><span class="badge b-critical">Needs a read</span></td><td><span class="badge b-outline">With coordinator</span></td><td>${waiting(r.days_waiting)}</td></tr>`
+            <td><span class="badge b-critical">Couldn't read automatically</span></td><td><span class="badge b-outline">With coordinator</span></td><td>${waiting(r.days_waiting)}</td></tr>`
         : `<tr class="row-link" data-job="${esc(r.job_id)}"><td>${ref(r.job_id)}<div class="text-xs text-slate-400">${esc(source(r))}</div></td><td>${esc(r.community)}</td>
             <td class="max-w-[360px]"><div class="truncate" title="${esc(r.fault)}">${esc(r.fault)}</div></td>
             <td>${priorityBadge(r)}</td><td>${statusBadge(r)}</td><td>${waiting(r.days_waiting)}</td></tr>`).join(''),
@@ -318,26 +350,48 @@ async function renderRequests() {
 
 // ---- Admin: priority queue ------------------------------------------------------------
 
+function pinAge(days) {
+  return days === 0 ? 'pinned today' : `pinned ${days} day${days > 1 ? 's' : ''}`;
+}
+
+// The row shows the coordinator position; this names the system one, so both are visible (§5.1).
+function moveText(j) {
+  return j.position < j.system_position ? `Moved up from #${j.system_position} by a coordinator`
+    : j.position > j.system_position ? `Moved down from #${j.system_position} by a coordinator`
+    : `Held at #${j.position} by a coordinator`;
+}
+
+// Master §5.1: explanation visible by default. A short form of the job's own "Why it's here" box.
+function rowReason(j) {
+  return `<div class="truncate text-xs text-slate-500">${esc(j.reason)}${j.flags.length ? ` · ${j.flags.length} flag${j.flags.length > 1 ? 's' : ''}` : ''}</div>`;
+}
+
+// Master §5.1: both positions shown, pin age, and new arrivals above a pin marked in words.
+function pinLines(j) {
+  return (j.pinned ? `<div class="truncate text-xs font-medium text-violet-700">${moveText(j)} · ${pinAge(j.pin.age_days)} · ${esc(j.pin.reason_tag)}</div>` : '')
+    + (j.arrived_above_pin ? '<div class="truncate text-xs font-medium text-amber-700">New since a pin: ranks above a pinned job</div>' : '');
+}
+
 async function renderQueue() {
-  setHead('Priority Queue', 'Ranked by safety, then urgency, then who reported first. Distance is shown but never used for order.',
+  setHead('Priority Queue', 'Safety first, then repair type and loss of use, then who reported first. Distance is shown but never used for order.',
     searchBox('Search reference, community, issue'));
   const q = await api('/api/queue');
   const ranked = q.ranked.filter(matches), band = q.review_band.filter(matches);
   page().innerHTML = `
-    ${band.length ? `<div class="mb-4">${card('Review band', tableWrap('<th>Reference</th><th>Community</th><th>Issue</th><th>Waiting</th><th></th>',
+    ${band.length ? `<div class="mb-4">${card('Needs a decision', tableWrap('<th>Reference</th><th>Community</th><th>Issue</th><th>Waiting</th><th></th>',
       band.map(j => `<tr class="row-link" data-job="${esc(j.job_id)}"><td>${ref(j.job_id)}</td><td>${esc(j.community)}</td>
-        <td class="max-w-[420px] truncate" title="${esc(j.fault)}">${esc(j.fault)}</td><td>${waiting(j.days_waiting)}</td>
-        <td class="text-right"><span class="badge b-review">Tier call needed</span></td></tr>`).join(''), '', 5),
-      { desc: 'Not on the fault list and no safety risk: held above the queue until a coordinator makes a tier call.', pad: false })}</div>` : ''}
+        <td class="max-w-[420px]"><div class="truncate" title="${esc(j.fault)}">${esc(j.fault)}</div>${rowReason(j)}</td><td>${waiting(j.days_waiting)}</td>
+        <td class="text-right"><span class="badge b-review">Choose repair type</span></td></tr>`).join(''), '', 5),
+      { desc: 'Not on the NT repair lists and no safety risk described: held above the queue until a coordinator chooses the repair type.', pad: false })}</div>` : ''}
     ${card('Ranked queue', tableWrap(
-      '<th class="w-12">Rank</th><th>Reference</th><th>Community</th><th>Issue</th><th>Priority</th><th>NT category</th><th class="text-right">Score</th><th>Waiting</th><th>Distance</th><th>Status</th>',
+      '<th class="w-12">Rank</th><th>Reference</th><th>Community</th><th>Issue</th><th>Priority</th><th>Repair type</th><th>Waiting</th><th>Distance</th><th>Status</th>',
       ranked.map(j => `<tr class="row-link" data-job="${esc(j.job_id)}"><td class="font-medium text-slate-500">${j.position}</td><td>${ref(j.job_id)}</td><td>${esc(j.community)}</td>
-        <td class="max-w-[300px]"><div class="truncate" title="${esc(j.fault)}">${esc(j.fault)}</div><div class="truncate text-xs text-slate-400">${esc(j.decided_by)}${j.flags.length ? ` · ${j.flags.length} flag${j.flags.length > 1 ? 's' : ''}` : ''}</div></td>
+        <td class="max-w-[300px]"><div class="truncate" title="${esc(j.fault)}">${esc(j.fault)}</div>${rowReason(j)}${pinLines(j)}</td>
         <td>${priorityBadge(j)}</td><td>${categoryBadge(j)}</td>
-        <td class="text-right tabular-nums">${j.urgency_tally == null ? '<span class="text-slate-400">—</span>' : `${j.urgency_tally}<span class="text-xs text-slate-400"> (${j.base_points}+${j.severity_bump})</span>`}</td>
         <td class="whitespace-nowrap">${waiting(j.days_waiting)}</td><td class="whitespace-nowrap text-slate-500">${dist(j.distance)}</td><td>${statusBadge(j)}</td></tr>`).join(''),
-      'No jobs match.', 10),
-      { desc: 'Click a job to see why it sits where it does and to assign a tradie.', pad: false })}`;
+      'No jobs match.', 9),
+      { desc: 'Click a job to see why it sits where it does and to assign a tradie.', pad: false,
+        action: q.pin_count ? `<span class="badge b-outline" title="Jobs a coordinator has moved; the system order underneath is unchanged">${q.pin_count} job${q.pin_count > 1 ? 's' : ''} moved by a coordinator</span>` : '' })}`;
   wireSearch(() => renderQueue().then(refreshIcons));
   linkRows();
 }
@@ -348,11 +402,11 @@ async function renderCommunities() {
   setHead('Communities', 'Who is waiting where. Use this to plan trips, not to reorder the queue.');
   const f = await api('/api/fairness');
   page().innerHTML = card('', tableWrap(
-    '<th>Community</th><th>To nearest office</th><th class="text-right">Open jobs</th><th class="text-right">Safety jobs</th><th class="text-right">In review</th><th>Oldest waiting</th>',
+    '<th>Community</th><th>To nearest office</th><th class="text-right">Open jobs</th><th class="text-right">Safety jobs</th><th class="text-right">Needs a decision</th><th>Oldest waiting</th>',
     f.communities.map(c => `<tr><td class="font-medium">${esc(c.community)}</td><td class="text-slate-500">${dist(c.distance)}</td>
-      <td class="text-right tabular-nums">${c.open}</td><td class="text-right">${c.safety ? `<span class="badge b-critical">${c.safety}</span>` : '<span class="text-slate-400">0</span>'}</td>
+      <td class="text-right tabular-nums">${c.open}</td><td class="text-right">${c.safety ? `<span class="badge b-critical" title="Open jobs where the report describes a safety risk">${c.safety}</span>` : '<span class="text-slate-400">0</span>'}</td>
       <td class="text-right tabular-nums">${c.review_band}</td>
-      <td>${c.oldest_days >= 14 ? `<span class="badge b-high">${waiting(c.oldest_days)}</span>` : waiting(c.oldest_days)}</td></tr>`).join(''),
+      <td>${c.oldest_days >= 14 ? `<span class="badge b-high" title="Waiting two weeks or more">${waiting(c.oldest_days)}</span>` : waiting(c.oldest_days)}</td></tr>`).join(''),
     'No open jobs.', 6), { pad: false });
 }
 
@@ -362,7 +416,7 @@ async function renderFairness() {
   const s = f.summary;
   page().innerHTML = `
     <div class="mb-4 flex items-start gap-2 rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900">${icon('scale', 'mt-0.5 size-4 shrink-0')}
-      <p>The real queue is ordered by <b>safety → urgency → oldest report</b>. Distance is not in the sort key, so a remote tenant can't be pushed back for being far away. The table shows what would happen if it were.</p></div>
+      <p>The real queue is ordered by <b>safety → repair type and loss of use → oldest report</b>. Distance is not in the sort key, so a remote tenant can't be pushed back for being far away. The table shows what would happen if it were.</p></div>
     <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
       ${stat('Jobs pushed back', s.jobs_pushed_back, 'if sorted nearest-first', 'arrow-down', 'text-red-500')}
       ${stat('Places lost', s.places_lost, 'in total across those jobs', 'list-ordered')}
@@ -392,8 +446,8 @@ async function renderReports() {
     `${i ? '<div class="h-px bg-slate-100"></div>' : ''}<div class="kv"><span class="text-slate-600">${esc(k)}</span><span class="font-semibold tabular-nums">${counts[k]}</span></div>`).join('')
     || '<p class="text-sm text-slate-500">Nothing yet.</p>');
   page().innerHTML = `<div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-      ${block('By priority', { ...tally(jobs, priorityOf), 'Needs a read': q.needs_human.length }, ['Critical', 'High', 'Medium', 'Low', 'Needs review', 'Needs a read'])}
-      ${block('By NT category', tally(jobs, j => j.tier === 'dangerous' ? 'Emergency' : j.tier === 'standard' ? 'General' : 'Unlisted'))}
+      ${block('By priority', { ...tally(jobs, priorityOf), "Couldn't read automatically": q.needs_human.length }, ['Critical', 'High', 'Medium', 'Routine', 'Needs a decision', "Couldn't read automatically"])}
+      ${block('By repair type', tally(jobs, j => REPAIR_TYPE[j.tier] || 'Not on the repair lists'))}
       ${block('By status', { ...tally(jobs, j => j.status), Completed: q.completed.length }, ['Open', 'Assigned', 'Completed'])}
       ${block('By community', tally(jobs, j => j.community))}
     </div>
@@ -404,9 +458,9 @@ async function renderReports() {
     catch (err) { toast(err.message); }
   };
   $('#exportBtn').onclick = () => {
-    const header = ['Rank', 'Reference', 'Community', 'Issue', 'Priority', 'NT category', 'Score', 'Safety', 'Days waiting', 'Status', 'Tradie', 'Why here'];
-    const lines = [...q.ranked, ...q.review_band].map(j => [j.position ?? 'review', j.job_id, j.community, j.fault, priorityOf(j),
-      j.tier || 'unlisted', j.urgency_tally ?? '', safetyText(j), j.days_waiting, j.status, j.tradie || '', j.decided_by || 'awaiting tier call']);
+    const header = ['Rank', 'Reference', 'Community', 'Issue', 'Priority', 'Repair type', 'Safety', 'Days waiting', 'Status', 'Tradie'];
+    const lines = [...q.ranked, ...q.review_band].map(j => [j.position ?? 'needs a decision', j.job_id, j.community, j.fault, priorityOf(j),
+      REPAIR_TYPE[j.tier] || 'Not on the repair lists', safetyText(j), j.days_waiting, j.status, j.tradie || '']);
     const csv = [header, ...lines].map(r => r.map(v => `"${String(v).replaceAll('"', '""')}"`).join(',')).join('\n');
     const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([csv], { type: 'text/csv' })), download: 'fairfix_queue.csv' });
     a.click();
@@ -428,12 +482,31 @@ function tradieOption(t, assignedId) {
     </div></label>`;
 }
 
+const ORDER_LINE = 'Safety risks go first. Then jobs are ordered by the type of repair and whether the household has lost the use of it completely. When jobs are level, the earlier report goes first.';
+
+// Grouped, each with its authority. No option is ever pre-selected (master §5.1: never a rubber stamp).
+function repairOptions(list) {
+  const group = (label, type) => `<optgroup label="${label}">${list.filter(e => e.repair_type === type)
+    .map(e => `<option value="${esc(e.name)}">${esc(e.name)} — ${esc(e.sources.join('; '))}</option>`).join('')}</optgroup>`;
+  return group('Emergency repairs', 'Emergency') + group('General repairs', 'General');
+}
+
+// Read-only reference: past calls are listed, never applied or used to pre-fill the form.
+function previousCalls(calls) {
+  return `<div class="mt-4 border-t border-slate-100 pt-3"><h3 class="text-sm font-medium">Previous calls</h3>
+    ${calls.length ? `<ol class="mt-2 space-y-2">${calls.map(c => `<li class="text-sm">
+      <div>${c.job_open ? `"${esc(c.fault)}"` : '<span class="text-slate-400">job no longer open</span>'} → treated like <b>${esc(c.treated_like)}</b> (${esc(c.repair_type)})</div>
+      <div class="text-xs text-slate-500">${esc(c.by)} · ${new Date(c.at).toLocaleDateString()} — ${esc(c.reason)}</div></li>`).join('')}</ol>`
+      : '<p class="mt-1 text-sm text-slate-500">None yet.</p>'}</div>`;
+}
+
 async function renderJob(id, trade) {
   const j = await api(`/api/jobs/${encodeURIComponent(id)}` + (trade ? `?trade=${encodeURIComponent(trade)}` : ''));
   const refData = await reference();
   setHead(`Job ${j.job_id}`, `${j.community}${j.region ? ' · ' + j.region : ''} · ${source(j)}`,
     `<button class="btn btn-outline" onclick="history.length > 1 ? history.back() : (location.hash = '#/queue')">${icon('chevron-left')}Back</button>`);
-  const untiered = j.urgency_tally == null;
+  const notListed = j.urgency_tally == null;
+  const calls = notListed ? await api('/api/tier-calls') : [];
   const d = j.logistics.distance;
   const needed = j.logistics.needed_trades;
   const tradeSource = j.logistics.trade_source;
@@ -447,16 +520,24 @@ async function renderJob(id, trade) {
 
   page().innerHTML = `
     <div class="mb-4 flex flex-wrap items-center gap-2">
-      ${j.position ? `<span class="badge b-outline">Rank ${j.position}</span>` : '<span class="badge b-review">Review band</span>'}
+      ${j.position ? `<span class="badge b-outline" title="Place in the queue">#${j.position} in the queue</span>` : '<span class="badge b-review">Needs a decision</span>'}
       ${priorityBadge(j)} ${categoryBadge(j)} ${statusBadge(j)}
-      <span class="badge b-outline">${safetyText(j)}</span>
+      <span class="badge b-outline" title="What the report says about safety">${safetyText(j)}</span>
     </div>
     <div class="grid gap-4 lg:grid-cols-3">
       <div class="min-w-0 space-y-4 lg:col-span-2">
+        ${card("Why it's here", `<p class="text-sm font-semibold">${esc(j.why_here[0])}</p>
+          <ul class="mt-2 list-disc space-y-1 pl-5 text-sm">${j.why_here.slice(1).map(l => `<li>${esc(l)}</li>`).join('')}</ul>`
+          + j.flags.map(f => `<div class="mt-2 flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-2 text-sm text-amber-900">${icon('triangle-alert', 'mt-0.5 size-4 shrink-0')}${esc(f)}</div>`).join('')
+          + (j.trace ? `<details class="mt-3"><summary class="cursor-pointer text-sm font-medium text-teal-700">Show the working</summary>
+            <table class="tbl mt-2"><tbody>${j.trace.map((r, i) => `<tr><td class="w-36 text-slate-500 ${i ? '' : 'border-t-0'}">${esc(r.label)}</td>
+            <td class="font-medium ${i ? '' : 'border-t-0'}">${esc(r.value)}</td><td class="text-slate-500 ${i ? '' : 'border-t-0'}">${esc(r.note)}</td></tr>`).join('')}</tbody></table></details>` : ''),
+          { desc: 'Built only from the recorded working. The repair type comes from the NT repair lists, never the model.' })}
+
         ${card('Report', `<pre class="whitespace-pre-wrap break-words rounded-md bg-slate-50 p-3 font-mono text-[13px] text-slate-800">${esc(j.raw_text)}</pre>
           <dl class="mt-3 grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[140px_1fr]">
             <dt class="text-slate-500">Source</dt><dd>${esc(source(j))}${j.source_file ? ` · ${esc(j.source_file)}${j.source_item ? ' item ' + j.source_item : ''}` : ''}</dd>
-            <dt class="text-slate-500">Reported</dt><dd>${new Date(j.original_timestamp).toLocaleString()} <span class="text-slate-400">(${esc(j.timestamp_source || 'from report')})</span></dd>
+            <dt class="text-slate-500">Reported</dt><dd>${reportedAt(j.original_timestamp, j.date_only)} <span class="text-slate-400">(${esc(j.timestamp_source || 'from report')})</span></dd>
             <dt class="text-slate-500">Read by</dt><dd>${esc(j.extractor)}</dd></dl>`,
           { desc: 'The exact text the model read. Name, phone, email and address are never sent to it.' })}
 
@@ -469,13 +550,6 @@ async function renderJob(id, trade) {
             : '<p class="text-sm text-slate-500">No quotes.</p>'}</div>`,
           { desc: 'Facts only, no scores. Code checks every quote word for word.' })}
 
-        ${card(j.trace ? 'Why this position' : 'Why it is in the review band',
-          (j.trace ? `<table class="tbl"><tbody>${j.trace.map((r, i) => `<tr><td class="w-36 text-slate-500 ${i ? '' : 'border-t-0'}">${esc(r.label)}</td>
-            <td class="font-medium ${i ? '' : 'border-t-0'}">${esc(r.value)}</td><td class="text-slate-500 ${i ? '' : 'border-t-0'}">${esc(r.note)}</td></tr>`).join('')}</tbody></table>`
-            : `<p class="text-sm">${esc(j.review_reason)}</p>`)
-          + j.flags.map(f => `<div class="mt-2 flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-2 text-sm text-amber-900">${icon('triangle-alert', 'mt-0.5 size-4 shrink-0')}${esc(f)}</div>`).join(''),
-          { desc: 'Every number has a named source. The tier comes from the fault table, never the model.' })}
-
         ${card('Tenant messages', `
           <div class="rounded-md border-l-2 border-teal-600 bg-slate-50 p-3 text-sm" id="sms">${esc(j.sms)}</div>
           <button class="btn btn-ghost btn-sm mt-1" data-copy="sms">${icon('copy', 'size-3.5')}Copy SMS</button>
@@ -486,11 +560,13 @@ async function renderJob(id, trade) {
       </div>
 
       <div class="space-y-4">
-        ${untiered ? card('Tier call', `<form id="tierForm" class="space-y-3">
-            <div><label class="lbl">Counts as</label><select name="fault_name" class="input" required><option value="">Choose a listed fault…</option>${refData.fault_names.map(n => `<option>${esc(n)}</option>`).join('')}</select></div>
+        ${notListed ? card('Choose repair type', `<form id="tierForm" class="space-y-3">
+            <p class="text-sm text-slate-600">${esc(ORDER_LINE)}</p>
+            <div><label class="lbl" for="treatLike">Treat like</label><select id="treatLike" name="fault_name" class="input" required><option value="">Choose a listed repair…</option>${repairOptions(refData.repair_list)}</select></div>
             <div><label class="lbl">Reason</label><textarea name="reason" class="input" required placeholder="e.g. Hard-wired smoke alarm fault: treat as an electrical safety repair"></textarea></div>
-            <button class="btn btn-primary w-full" type="submit">Save tier call</button></form>`,
-          { desc: 'Not on the fault list. Choose what it counts as; it then enters the queue by the normal rules.' }) : ''}
+            <button class="btn btn-primary w-full" type="submit">Save repair type</button></form>
+            ${previousCalls(calls)}`,
+          { desc: 'Not on the NT repair lists. Choose what it should be treated like; it then enters the queue by the normal rules.' }) : ''}
 
         ${card('Assign a tradie', `<form id="assignForm" class="space-y-3">
             ${tradePicker}
@@ -498,6 +574,21 @@ async function renderJob(id, trade) {
             <div><label class="lbl">Note</label><textarea name="note" class="input" required placeholder="e.g. Mia is in Katherine Thursday, can reach Ngukurr Friday">${esc(j.status === 'Assigned' ? j.note || '' : '')}</textarea></div>
             <button class="btn btn-primary w-full" type="submit">${j.status === 'Assigned' ? 'Change assignment' : 'Assign tradie'}</button></form>`,
           { desc: `${assignDesc}Recommendation is advice for this job only: it never changes the queue order.` })}
+
+        ${!j.in_review_band && j.status === 'Open' ? card('Override position', `
+            ${j.pinned ? `<div class="mb-3 flex items-center justify-between gap-2 rounded-md border border-violet-200 bg-violet-50 p-2 text-sm text-violet-800">
+              <span>${moveText(j)} · ${pinAge(j.pin.age_days)} · ${esc(j.pin.reason_tag)}</span>
+              <button id="unpinBtn" class="btn btn-outline btn-sm" type="button">Unpin</button></div>` : ''}
+            <form id="pinForm" class="space-y-3">
+            <div><label class="lbl">Reason</label><div class="flex flex-wrap gap-2">${refData.reason_tags.map(t => `<label class="cursor-pointer"><input type="radio" name="reason_tag" value="${esc(t)}" class="peer sr-only" required ${j.pin?.reason_tag === t ? 'checked' : ''}><span class="btn btn-outline btn-sm peer-checked:border-teal-600 peer-checked:bg-teal-50 peer-checked:text-teal-800">${esc(t)}</span></label>`).join('')}</div></div>
+            <p id="pinPreview" class="text-sm font-medium text-violet-800"></p>
+            <div class="grid grid-cols-3 gap-2">
+              <button id="mvUp" class="btn btn-outline btn-sm" type="button">Move up</button>
+              <button id="mvDown" class="btn btn-outline btn-sm" type="button">Move down</button>
+              <button id="mvTop" class="btn btn-outline btn-sm" type="button">Move to top of group</button></div>
+            <div class="flex gap-2"><button id="mvSave" class="btn btn-primary flex-1" type="submit">Save move</button>
+              <button id="mvCancel" class="btn btn-outline flex-1" type="button">Cancel</button></div></form>`,
+          { desc: 'Shown on top of the system order, which never changes. Safety jobs stay above the rest. Lasts until unpinned or dispatched.' }) : ''}
 
         ${card('Close or reopen', `<form id="decisionForm" class="space-y-3">
             <textarea name="note" class="input" required placeholder="e.g. Repaired and tested; tenant confirmed"></textarea>
@@ -507,8 +598,8 @@ async function renderJob(id, trade) {
 
         ${card('Tenant follow-up', `<form id="followForm" class="space-y-3">
             <textarea name="text" class="input" required placeholder="e.g. water is getting worse, now dripping near the light switch"></textarea>
-            <button class="btn btn-outline w-full" type="submit">${icon('message-square-reply')}Add follow-up and re-read</button></form>`,
-          { desc: 'Re-read and re-ranked; the original report date is kept.' })}
+            <button class="btn btn-outline w-full" type="submit">${icon('message-square-reply')}Add follow-up and read again</button></form>`,
+          { desc: 'Read again and placed again; the original report date is kept.' })}
 
         ${card('Logistics', `
           <div class="kv"><span class="text-slate-500">Nearest housing office</span><span>${d.km == null ? '<span class="text-slate-400">unknown (community not listed)</span>' : `${esc(d.office)} · ${dist(d)}`}</span></div>
@@ -516,7 +607,7 @@ async function renderJob(id, trade) {
           <div class="kv"><span class="text-slate-500">Same trip possible</span><span class="text-right">${j.logistics.shared_trip.length ? j.logistics.shared_trip.map(x => ref(x)).join(', ') : 'none'}</span></div>
           <div class="h-px bg-slate-100"></div>
           <p class="pt-2 text-sm text-slate-600">${esc(j.logistics.community_line)}</p>`,
-          { desc: 'Display only. None of this changes the order.' })}
+          { desc: 'Shown for planning — never changes the order.' })}
 
         ${card('Audit trail', j.audit.length ? `<ol class="space-y-3">${j.audit.map(a => `<li class="text-sm">
             <div class="text-xs text-slate-500">${new Date(a.at).toLocaleString()} · ${esc(a.actor)}</div>
@@ -529,7 +620,30 @@ async function renderJob(id, trade) {
     try { await navigator.clipboard.writeText($('#' + b.dataset.copy).textContent); toast('Copied.'); }
     catch { toast('Copy failed: select the text instead.'); }
   });
-  submitForm('#tierForm', f => api(`/api/jobs/${id}/tier`, { method: 'POST', body: f }), 'Tier call saved. The job is now in the queue.');
+  // The move buttons change a preview only; "Save move" sends one pin, so stepping several
+  // places is one decision in the history, not one per click. Moves stay inside the job's
+  // safety group (master §3.4); the server refuses anything else.
+  if ($('#pinForm')) {
+    const { top, last } = j.move_range;
+    let preview = j.position;
+    const show = () => {
+      $('#pinPreview').textContent = preview === j.position ? `Now #${j.position}. Move it, then save.` : `Preview: #${j.position} → #${preview}`;
+      $('#mvUp').disabled = $('#mvTop').disabled = preview <= top;
+      $('#mvDown').disabled = preview >= last;
+      $('#mvSave').disabled = $('#mvCancel').disabled = preview === j.position;
+    };
+    $('#mvUp').onclick = () => { preview -= 1; show(); };
+    $('#mvDown').onclick = () => { preview += 1; show(); };
+    $('#mvTop').onclick = () => { preview = top; show(); };
+    $('#mvCancel').onclick = () => { preview = j.position; show(); };
+    show();
+    submitForm('#pinForm', f => api(`/api/jobs/${id}/pin`, { method: 'POST', body: { target_position: preview, reason_tag: f.reason_tag } }), 'Move saved. The system position is still shown.');
+  }
+  const unpin = $('#unpinBtn');
+  if (unpin) unpin.onclick = async () => {
+    try { await api(`/api/jobs/${id}/pin`, { method: 'DELETE' }); toast('Unpinned.'); await route(); } catch (err) { toast(err.message); }
+  };
+  submitForm('#tierForm', f => api(`/api/jobs/${id}/tier`, { method: 'POST', body: f }), 'Repair type saved. The job is now in the queue.');
   submitForm('#assignForm', f => {
     if (!f.tradie_id) throw new Error('Choose a tradie');
     return api(`/api/jobs/${id}/assign`, { method: 'POST', body: { tradie_id: Number(f.tradie_id), note: f.note, trade: f.trade || null } });
@@ -545,7 +659,7 @@ async function renderJob(id, trade) {
   submitForm('#decisionForm', (f, btn) => api(`/api/jobs/${id}/decision`, { method: 'POST', body: { status: btn.value, note: f.note } }), 'Saved.');
   submitForm('#followForm', async f => {
     const r = await api(`/api/jobs/${id}/followup`, { method: 'POST', body: f });
-    toast(r.status === 'ok' ? 'Follow-up read and the job re-ranked.' : 'Follow-up saved, but it needs a human read (flagged on this job).');
+    toast(r.status === 'ok' ? 'Follow-up read and the job placed again.' : "Follow-up saved, but it couldn't be read automatically (flagged on this job).");
   });
 }
 
@@ -572,7 +686,7 @@ async function renderTradies() {
   const [tradies, refData] = await Promise.all([api('/api/tradies'), reference()]);
   page().innerHTML = `
     ${card('', tableWrap('<th>Name</th><th>Trades</th><th>Home base</th><th>Phone</th><th>Assigned jobs</th><th class="text-right">Availability</th>',
-      tradies.map(t => `<tr><td class="font-medium">${esc(t.name)}</td><td>${t.trades.map(x => `<span class="badge b-outline mr-1">${esc(x)}</span>`).join('')}</td>
+      tradies.map(t => `<tr><td class="font-medium">${esc(t.name)}</td><td>${t.trades.map(x => `<span class="badge b-outline mr-1" title="Trade this tradie is listed for">${esc(x)}</span>`).join('')}</td>
         <td>${esc(t.base)}</td><td class="whitespace-nowrap text-slate-500">${esc(t.phone)}</td>
         <td>${t.jobs.length ? t.jobs.map(x => `${ref(x.job_id)} <span class="text-xs text-slate-400">${esc(x.community)}</span>`).join('<br>') : '<span class="text-slate-400">none</span>'}</td>
         <td class="text-right"><button class="btn btn-outline btn-sm" data-toggle="${t.id}">
@@ -654,7 +768,7 @@ async function renderIntake() {
 function step(n, title, body, tone = 'b-accent') {
   return `<li class="relative flex gap-3 pb-5 last:pb-0">
     <span class="absolute left-3 top-7 h-[calc(100%-1.75rem)] w-px bg-slate-200"></span>
-    <span class="badge ${tone} relative z-10 grid size-6 shrink-0 place-items-center rounded-full p-0">${n}</span>
+    <span class="badge ${tone} relative z-10 grid size-6 shrink-0 place-items-center rounded-full p-0" title="Step ${n}: ${title}">${n}</span>
     <div class="min-w-0 flex-1"><div class="text-sm font-semibold">${title}</div><div class="mt-1 space-y-1.5 text-sm text-slate-600">${body}</div></div></li>`;
 }
 
@@ -664,17 +778,17 @@ function stageResult(r) {
   const head = `<div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
       <div><div class="text-sm font-semibold">Ticket ${esc(s1.request_id)}</div>
         <div class="text-xs text-slate-500">${esc(s1.community)}${s1.region ? ' · ' + esc(s1.region) : ''}${s1.source_file ? ` · ${esc(s1.source_file)}${s1.source_item != null ? ' item ' + s1.source_item : ''}` : ''}</div></div>
-      ${ok ? '<span class="badge b-ok">Ranked</span>' : '<span class="badge b-critical">Needs a human read</span>'}</div>`;
-  const stage1 = step(1, 'Intake', `
+      ${ok ? '<span class="badge b-ok">Read</span>' : `<span class="badge b-critical">Couldn't read automatically</span>`}</div>`;
+  const stage1 = step(1, 'Received', `
       <div>Ticket <b class="text-slate-900">${esc(s1.request_id)}</b> · tenant ${esc(s1.tenant_id)} · ${s1.source_tag === 'officer' ? 'officer (phone call)' : 'tenant (form or message)'}</div>
-      <div>Reported ${new Date(s1.original_report_timestamp).toLocaleString()} <span class="text-slate-400">(${esc(s1.timestamp_source || 'from report')})</span></div>
+      <div>Reported ${reportedAt(s1.original_report_timestamp, s1.date_only)} <span class="text-slate-400">(${esc(s1.timestamp_source || 'from report')})</span></div>
       <div class="flex gap-1.5 text-xs text-slate-500">${icon('shield-alert', 'mt-0.5 size-3.5 shrink-0 text-teal-700')}${esc(s1.privacy)}</div>
       <pre class="whitespace-pre-wrap break-words rounded-md bg-slate-50 p-2.5 font-mono text-xs text-slate-800">${esc(s1.raw_text)}</pre>`);
-  const stage2 = step(2, 'Extraction (model reads)', ok
+  const stage2 = step(2, 'Read', ok
       ? `<div><span class="text-slate-500">Read by</span> ${esc(s2.extractor)}</div>` + s2.faults.map(f => `<div class="rounded-md border border-slate-200 p-2.5">
           <div class="font-medium text-slate-900">"${esc(f.fault_description)}"</div>
           <div class="mt-1 grid gap-x-3 text-xs sm:grid-cols-2">${f.facts.map(x => `<div><span class="text-slate-500">${esc(x.field)}:</span> ${esc(x.value)}</div>`).join('')}</div></div>`).join('')
-      : `<div class="text-red-700">${esc(s2.problem)}</div><div class="text-xs text-slate-500">The report is kept and listed under "Needs a human read". Nothing is guessed.</div>`,
+      : `<div class="text-red-700">${esc(s2.problem)}</div><div class="text-xs text-slate-500">The report is kept and listed under "Couldn't read automatically". Nothing is guessed.</div>`,
     ok ? 'b-accent' : 'b-critical');
   const jobs = r.jobs.map(j => {
     const s6 = j.stage6, s5 = j.stage5, s4 = j.stage4;
@@ -683,20 +797,21 @@ function stageResult(r) {
         <div class="text-sm"><span class="font-semibold">Job ${esc(j.job_id)}</span> <span class="text-slate-500">· ${esc(j.fault)}</span></div>
         ${admin ? `<a href="#/job/${esc(j.job_id)}" class="btn btn-ghost btn-sm">Open job ${icon('arrow-up-right', 'size-3.5')}</a>` : ''}</div>
       <ol class="p-3">
-        ${step(3, 'Verification', j.stage3.length ? j.stage3.map(sp => `<div class="flex items-start gap-2"><span class="w-28 shrink-0 text-xs text-slate-500">${esc(sp.field.replaceAll('_', ' '))}</span>
+        ${step(3, 'Quotes checked', j.stage3.length ? j.stage3.map(sp => `<div class="flex items-start gap-2"><span class="w-28 shrink-0 text-xs text-slate-500">${esc(sp.field.replaceAll('_', ' '))}</span>
             <span class="flex-1">"${esc(sp.text)}"</span>${sp.verified ? '<span class="badge b-ok">In report</span>' : '<span class="badge b-critical">Not in report</span>'}</div>`).join('') : 'No quotes to check.')}
-        ${step(4, 'Evaluation (urgency and safety)', `
-            <div>${s4.tier ? `<b class="text-slate-900">${esc(s4.tier_entry)}</b> → ${esc(s4.tier)} <span class="text-slate-400">(${esc(s4.tier_sources)})</span>` : 'Not on the fault list: no tier'}</div>
-            ${s4.urgency_tally != null ? `<div>Urgency score <b class="text-slate-900">${s4.urgency_tally}</b> = ${s4.base_points} + ${s4.severity_bump} <span class="text-slate-400">(${esc(s4.tally_reasons.join('; '))})</span></div>` : ''}
-            <div>Safety level <b class="text-slate-900">${s4.safety_level}</b> <span class="text-slate-400">(${esc(s4.safety_reason)})</span></div>`)}
-        ${step(5, 'Logistics', `
-            <div>Required trade: <b class="text-slate-900">${s5.required_trades.length ? esc(s5.required_trades.join(' or ')) : 'not confirmed yet'}</b></div>
-            <div>Nearest housing office: ${s5.distance.km == null ? '<span class="text-slate-400">unknown (community not listed)</span>' : `${esc(s5.distance.office)} · ${dist(s5.distance)} straight line`} <span class="text-xs text-slate-400">· not used for order</span></div>
-            <div>Suggested tradie: ${esc(s5.recommended_tradie || (s5.required_trades.length ? 'none available' : 'after a tier call sets the trade'))}</div>`)}
-        ${step(6, 'Ranking and explanation', `
-            <div class="flex flex-wrap items-center gap-2">${s6.in_review_band ? '<span class="badge b-review">Review band</span>' : `<span class="badge b-outline">Rank ${s6.position} of ${s6.queue_length}</span>`}
+        ${step(4, 'Repair type', `
+            <div>${s4.tier ? `<b class="text-slate-900">${esc(s4.tier_entry)}</b> → ${REPAIR_TYPE[s4.tier]} <span class="text-slate-400">(${esc(s4.tier_sources)})</span>` : 'Not on the repair lists'}</div>
+            ${s4.urgency_tally != null ? `<details><summary class="cursor-pointer text-xs font-medium text-teal-700">Show the working</summary>
+              <div>Urgency score <b class="text-slate-900">${s4.urgency_tally}</b> = ${s4.base_points} + ${s4.severity_bump} <span class="text-slate-400">(${esc(s4.tally_reasons.join('; '))})</span></div></details>` : ''}`)}
+        ${step(5, 'Safety', `
+            <div><b class="text-slate-900">${['No safety risk described', 'Possible safety risk', 'Safety risk now'][s4.safety_level]}</b> <span class="text-slate-400">(${esc(s4.safety_reason)})</span></div>`)}
+        ${step(6, 'Queue place', `
+            <div class="flex flex-wrap items-center gap-2">${s6.in_review_band ? '<span class="badge b-review">Needs a decision</span>' : `<span class="badge b-outline" title="Place in the queue">#${s6.position} of ${s6.queue_length}</span>`}
               ${priorityBadge(j)} ${categoryBadge(j)}</div>
-            <div class="text-slate-500">${esc(s6.decided_by)}</div>
+            <ul class="list-disc space-y-0.5 pl-5">${s6.why_here.map(l => `<li>${esc(l)}</li>`).join('')}</ul>
+            <div class="text-xs text-slate-500">Shown for planning — never changes the order: required trade ${s5.required_trades.length ? esc(s5.required_trades.join(' or ')) : 'not confirmed yet'} ·
+              nearest housing office ${s5.distance.km == null ? 'unknown (community not listed)' : `${esc(s5.distance.office)}, ${dist(s5.distance)} straight line`} ·
+              suggested tradie ${esc(s5.recommended_tradie || (s5.required_trades.length ? 'none available' : 'after a repair type is chosen'))}</div>
             <div class="rounded-md border-l-2 border-teal-600 bg-slate-50 p-2.5 text-slate-800"><div class="mb-1 text-xs font-medium text-slate-500">Why is my repair here? (tenant answer)</div>${esc(s6.why)}</div>
             <div class="rounded-md border-l-2 border-slate-300 bg-slate-50 p-2.5 text-slate-800"><div class="mb-1 text-xs font-medium text-slate-500">Tenant SMS</div>${esc(s6.sms)}</div>`)}
       </ol></div>`;
@@ -713,7 +828,7 @@ async function renderMine() {
   page().innerHTML = card('', tableWrap('<th>Reference</th><th>Community</th><th>Submitted</th><th>Report</th><th>Progress</th>',
     rows.map(r => `<tr><td class="font-medium">${r.jobs.length ? r.jobs.map(x => esc(x.job_id)).join('<br>') : esc(r.report_id)}</td><td>${esc(r.community)}</td>
       <td class="whitespace-nowrap text-slate-500">${new Date(r.submitted_at).toLocaleString()}</td><td class="max-w-[360px]"><div class="truncate" title="${esc(r.raw_text)}">${esc(r.raw_text)}</div></td>
-      <td>${!r.read ? '<span class="badge b-critical">Needs a human read</span>' : r.jobs.map(x => x.status === 'Assigned' ? `<span class="badge b-accent">Assigned · ${esc(x.tradie)}</span>`
+      <td>${!r.read ? `<span class="badge b-critical">Couldn't read automatically</span>` : r.jobs.map(x => x.status === 'Assigned' ? `<span class="badge b-accent" title="Sent to this tradie">Assigned · ${esc(x.tradie)}</span>`
         : x.status === 'Completed' ? '<span class="badge b-ok">Completed</span>' : '<span class="badge b-outline">With the coordinator</span>').join('<br>')}</td></tr>`).join(''),
     'Nothing submitted yet. Use "Upload report".', 5), { pad: false });
 }
@@ -725,19 +840,19 @@ function renderHow() {
   const stages = [
     ['Intake', 'Code', 'Python reads the form or message, removes personal details and the tenant\'s own urgency label, and stamps the report time.'],
     ['Extraction', 'AI', 'The model reads the tenant\'s words and returns facts with exact quotes: which listed fault, any alternative, any hazard. No numbers.'],
-    ['Verification', 'Code', 'Every quote is checked word for word against the report. A made-up quote is caught and can never lower a score.'],
-    ['Evaluation', 'Code', 'The tier is looked up in the NT fault table (Residential Tenancies Act s63). Score = 3 or 2, +1 unless another working one is named. Safety level 0–2 from the hazard.'],
+    ['Verification', 'Code', 'Every quote is checked word for word against the report. A made-up quote is caught and can never lower a job\'s place.'],
+    ['Evaluation', 'Code', 'The repair type (emergency or general) is looked up in the NT repair lists: the Residential Tenancies Act s63(2) and nt.gov.au guidance. A full loss of use counts for more unless the report mentions a working alternative. Safety comes from the hazard described.'],
     ['Logistics', 'Code', 'Distance, shared trips, community waiting times and tradie suggestions for the coordinator. They never change the order.'],
-    ['Ranking', 'Code', 'Sorted by safety, then score, then oldest report. Each job gets a written reason, a coordinator view and a tenant message.'],
+    ['Ranking', 'Code', 'Sorted by safety, then repair type and loss of use, then oldest report. Each job gets a written reason, a coordinator view and a tenant message.'],
   ];
   page().innerHTML = `
     <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">${stages.map(([t, k, p], i) => `<div class="card card-body">
       <div class="flex items-center justify-between"><span class="text-sm font-semibold">${i + 1}. ${t}</span>
         <span class="badge ${k === 'AI' ? 'b-high' : 'b-outline'}">${k}</span></div><p class="mt-2 text-sm text-slate-600">${p}</p></div>`).join('')}</div>
     <div class="mt-4 grid gap-4 lg:grid-cols-3">
-      ${card('What the model never sees', '<ul class="list-disc space-y-1 pl-5 text-sm text-slate-600"><li>Tier labels or point values</li><li>Scoring rules or rank positions</li><li>Other tenants\' jobs</li><li>The tenant\'s own urgency rating</li><li>Name, phone, email or address</li></ul>')}
-      ${card('Guarantees checked by tests', '<ul class="list-disc space-y-1 pl-5 text-sm text-slate-600"><li>No unflagged job ranks above a flagged one</li><li>Equal safety and score: oldest report first</li><li>Changing any distance never changes any position</li><li>How a tenant writes doesn\'t lower their score</li><li>A follow-up never resets the report date</li></ul>')}
-      ${card('Who does what', '<ul class="list-disc space-y-1 pl-5 text-sm text-slate-600"><li><b>Officer</b>: records calls and messages, uploads forms, gives the tenant a reference.</li><li><b>Admin</b>: tier calls, assigns tradies, closes jobs. Every decision has a note in the audit trail.</li><li><b>The system</b>: ranks and explains. It never assigns a tradie or overrides the admin.</li></ul>')}
+      ${card('What the model never sees', '<ul class="list-disc space-y-1 pl-5 text-sm text-slate-600"><li>Repair types or how they are weighed</li><li>The ordering rules or queue places</li><li>Other tenants\' jobs</li><li>The tenant\'s own urgency rating</li><li>Name, phone, email or address</li></ul>')}
+      ${card('Guarantees checked by tests', '<ul class="list-disc space-y-1 pl-5 text-sm text-slate-600"><li>No unflagged job ranks above a flagged one</li><li>When everything else is equal: oldest report first</li><li>Changing any distance never changes any position</li><li>How a tenant writes doesn\'t lower their place</li><li>A follow-up never resets the report date</li></ul>')}
+      ${card('Who does what', '<ul class="list-disc space-y-1 pl-5 text-sm text-slate-600"><li><b>Officer</b>: records calls and messages, uploads forms, gives the tenant a reference.</li><li><b>Admin</b>: chooses repair types, assigns tradies, closes jobs. Every decision has a note in the audit trail.</li><li><b>The system</b>: ranks and explains. It never assigns a tradie or overrides the admin.</li></ul>')}
     </div>`;
 }
 

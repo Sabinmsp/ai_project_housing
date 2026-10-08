@@ -22,6 +22,7 @@ from triage.explain import (
     tenant_sms,
     tenant_sms_report,
     tenant_why,
+    WHY_PINNED_LINE,
 )
 from triage.models import EnrichedJob, ExtractionResult, ExtractionStatus, VerifiedSpan
 from triage.ranking import NO_TIER_FLAG, REVIEW_BAND_REASON, rank
@@ -590,7 +591,7 @@ WHY_IMPACT = "We know this is hard to live with. A coordinator can see how long 
 ])
 @pytest.mark.parametrize("community", ["Darwin", "Wadeye", "Atlantis"])
 def test_why_per_category(path: str, status: str, community: str) -> None:
-    why = tenant_why(in_community(path_job(path, fault="kitchen tap dripping"), community))
+    why = tenant_why(in_community(path_job(path, fault="kitchen tap dripping"), community), pinned=False)
     assert why == (f'Your "kitchen tap dripping" repair (R-3F9A1C2B) {status} '
                    f"Yours was received on 28 September 2026. {WHY_IMPACT} {HELP}")
 
@@ -599,18 +600,18 @@ def test_why_date_is_nt_local() -> None:
     # 20:00 UTC on the 28th is 05:30 on the 29th in Darwin.
     job = EnrichedJob.model_validate({**path_job("routine").model_dump(),
                                       "original_report_timestamp": datetime(2026, 9, 28, 20, 0, tzinfo=timezone.utc)})
-    assert "Yours was received on 29 September 2026." in tenant_why(job)
+    assert "Yours was received on 29 September 2026." in tenant_why(job, pinned=False)
 
 
 @pytest.mark.parametrize("status", [ExtractionStatus.FLAGGED_FOR_HUMAN, ExtractionStatus.NO_FAULT_NAMED])
 def test_flagged_and_out_of_scope_why(status: ExtractionStatus) -> None:
-    why = tenant_why(not_extracted(status))
+    why = tenant_why(not_extracted(status), pinned=False)
     assert why == f"Your repair (R-3F9A1C2B) is with a coordinator, who is deciding what kind of repair it is. {WHY_IMPACT} {HELP}"
 
 
 def test_ok_extraction_result_has_no_why() -> None:
     with pytest.raises(ValueError, match="EnrichedJob"):
-        tenant_why(not_extracted(ExtractionStatus.OK))
+        tenant_why(not_extracted(ExtractionStatus.OK), pinned=False)
 
 
 WHY_BANNED = ("position", "queue", "number", "ahead", "behind", "other job", "other tenant", "tier", "point",
@@ -620,10 +621,12 @@ WHY_BANNED = ("position", "queue", "number", "ahead", "behind", "other job", "ot
 
 
 def every_why() -> list[str]:
-    whys = [tenant_why(in_community(path_job(p), c)) for p in ("safety_active", "safety_conditional", "urgent",
+    whys = [tenant_why(in_community(path_job(p), c), pinned=False) for p in ("safety_active", "safety_conditional", "urgent",
                                                              "routine", "review") for c in ("Darwin", "Wadeye", "Atlantis")]
-    return [*whys, tenant_why(not_extracted(ExtractionStatus.FLAGGED_FOR_HUMAN)),
-            tenant_why(not_extracted(ExtractionStatus.NO_FAULT_NAMED))]
+    # Pinned answers too: the coordinator's line must obey the same banned-word rules.
+    whys += [tenant_why(in_community(path_job(p), "Wadeye"), pinned=True) for p in RANKED_PATHS]
+    return [*whys, tenant_why(not_extracted(ExtractionStatus.FLAGGED_FOR_HUMAN), pinned=False),
+            tenant_why(not_extracted(ExtractionStatus.NO_FAULT_NAMED), pinned=False)]
 
 
 def test_no_why_uses_banned_wording() -> None:
@@ -635,7 +638,27 @@ def test_no_why_uses_banned_wording() -> None:
 
 def test_why_reads_only_the_tenants_own_job() -> None:
     # No queue, trace or position can reach it: its only input is this job's own record.
-    assert list(inspect.signature(tenant_why).parameters) == ["job"]
+    # pinned is a bare bool: it carries no position, tag or other job (master §5.1).
+    params = inspect.signature(tenant_why).parameters
+    assert list(params) == ["job", "pinned"]
+    assert params["pinned"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert params["pinned"].default is inspect.Parameter.empty
+
+
+@given(path=st.sampled_from(RANKED_PATHS))
+def test_a_pin_adds_exactly_one_line_to_why(path: str) -> None:
+    job = path_job(path)
+    plain, pinned = tenant_why(job, pinned=False), tenant_why(job, pinned=True)
+    assert pinned != plain and pinned.replace(WHY_PINNED_LINE + " ", "", 1) == plain
+    assert pinned.count(WHY_PINNED_LINE) == 1
+    assert WHY_PINNED_LINE == "A coordinator has adjusted when your repair will be handled."
+
+
+def test_only_a_ranked_job_can_be_pinned_and_pinned_must_be_given() -> None:
+    with pytest.raises(ValueError, match="cannot be pinned"):
+        tenant_why(not_extracted(ExtractionStatus.FLAGGED_FOR_HUMAN), pinned=True)
+    with pytest.raises(TypeError):
+        tenant_why(path_job("routine"))  # type: ignore[call-arg]
 
 
 @given(path=st.sampled_from(["safety_active", "safety_conditional", "urgent", "routine", "review"]),
@@ -647,7 +670,7 @@ def test_same_own_facts_different_queue_give_identical_why(path: str, queue_a: l
     for queue in (queue_a, queue_b, []):
         jobs = {j.request_id: j for j in (own, *queue)}
         rank([to_rank_input(j) for j in jobs.values()])  # the queue exists; WHY must not depend on it
-        whys.append(tenant_why(jobs[own.request_id]))
+        whys.append(tenant_why(jobs[own.request_id], pinned=False))
     assert whys[0] == whys[1] == whys[2]
     for other in (*queue_a, *queue_b):
         assert other.request_id not in whys[0]
@@ -659,7 +682,7 @@ def test_logistics_fields_naming_other_jobs_never_change_the_why() -> None:
                                        "starvation_line": "3 jobs waiting over 14 days", "distance_cost_km": 412, "nearest_office": "Palmerston office",
                                        "capacity_block_flag": True, "next_actionable": "Thursday",
                                        "flags": ("Possible duplicate (also R-7D04E8A1)",)})
-    assert tenant_why(busy) == tenant_why(own)
+    assert tenant_why(busy, pinned=False) == tenant_why(own, pinned=False)
 
 
 def test_coordinator_view_shows_tenant_asked_why_and_tenant_text_does_not_change() -> None:
@@ -706,7 +729,7 @@ def test_every_dangerous_entry_reads_urgent(entry: str) -> None:
     # Category word follows the tier: these cite no RTA s63, and must still read urgent.
     job = hazard_job(entry, fault="drain overflowing", safety="none")
     assert "It's being treated as an urgent repair under NT rules." in tenant_sms(job)
-    assert "is booked as an urgent repair." in tenant_why(job)
+    assert "is booked as an urgent repair." in tenant_why(job, pinned=False)
 
 
 

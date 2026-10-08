@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import secrets
 import sqlite3
 import tempfile
@@ -22,18 +23,20 @@ from typing import Literal, Optional
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from triage.adapter import to_rank_input
 from triage import second_reader
 from triage.distances import community_names, km_between
 from triage.escalation import escalate
-from triage.evaluation import compute_tally, lookup_tier
+from triage.evaluation import ALTERNATIVE, DEGRADED, NO_ALTERNATIVE, SIGN, compute_tally, lookup_tier
 from triage.explain import ReasoningTrace, tenant_sms, tenant_why
 from triage.extraction import OfflineExtractor, OpenAICompatibleClient, configured_model
 from triage.intake import DuplicateRequestError, SQLiteReportRepository, UnknownRequestError, create_report
 from triage.models import EnrichedJob, ExtractedFacts, ExtractionResult, ExtractionStatus, Report, SourceTag
+from triage.overrides import REASON_TAGS, SAFETY_BLOCK, DisplayRow, Pin, apply_pins, pin_breaks_safety
 from triage.pipeline import build_jobs, build_report_jobs, enrich_fault, save_children, stage2_extract, stage6_rank
+from triage.ranking import NO_TIER_FLAG
 from triage.recording import RECORDED_DIR, RecordedClient, RecordingClient, RecordingMissing
 from triage.report_files import load_reports
 from triage.tiers import FAULT_NAMES, TIER_TABLE
@@ -228,6 +231,10 @@ class Workspace:
         # is refused instead of making a second copy of every job.
         self.uploads: dict[str, list[str]] = state.get("uploads", {})
         self.audit: list[dict] = state.get("audit", [])
+        # Master §5.1: pins sit on top of the ranking and never feed back into it. The history is
+        # append-only, for reporting (the fairness view), since a pin is removed on dispatch.
+        self.pins = {k: Pin.model_validate(v) for k, v in state.get("pins", {}).items()}
+        self.pin_history: list[dict] = state.get("pin_history", [])
         self.skipped: list[dict] = []
         self._restore()
 
@@ -237,6 +244,7 @@ class Workspace:
             "tier_calls": {k: v.model_dump(mode="json") for k, v in self.tier_calls.items()},
             "status": self.status, "extra_flags": self.extra_flags, "tradies": self.tradies,
             "submitted": self.submitted, "uploads": self.uploads, "audit": self.audit,
+            "pins": {k: v.model_dump(mode="json") for k, v in self.pins.items()}, "pin_history": self.pin_history,
         })
 
     def _restore(self) -> None:
@@ -324,7 +332,7 @@ class Workspace:
             **job.model_dump(), "tier": tier.tier, "tier_entry": tally.winner, "base_points": tally.base,
             "severity_bump": tally.bump, "urgency_tally": tally.tally, "tally_reasons": tally.reasons,
             "required_trades": required_trades(tally.winner),
-            "flags": (*job.flags, f'Tier set by coordinator as "{call.fault_name}": {call.reason}'),
+            "flags": (*job.flags, f'Repair type chosen by a coordinator: treated like "{call.fault_name}": {call.reason}'),
         })
 
     def log(self, job_id: Optional[str], actor: str, action: str, note: str = "") -> None:
@@ -337,6 +345,26 @@ class Workspace:
     def ranking(self) -> tuple[list[str], list[ReasoningTrace]]:
         out = stage6_rank(list(self.open_jobs().values()))
         return list(out.result.review_band), list(out.traces)
+
+    def display(self) -> tuple[list[str], list[ReasoningTrace], dict[str, DisplayRow]]:
+        """The ranking, then the coordinator's pins laid over it for display."""
+        band, traces = self.ranking()
+        jobs = self.open_jobs()
+        safety = {t.job_id: t.safety_level for t in traces}
+        # When the report entered the app, not the tenant's reported time: a form uploaded today can
+        # carry last week's date and still be a new arrival. No fallback: apply_pins raises if absent.
+        arrived = {t.job_id: datetime.fromisoformat(self.submitted[jobs[t.job_id].parent_report_id]["at"])
+                   for t in traces if jobs[t.job_id].parent_report_id in self.submitted}
+        rows = apply_pins([t.job_id for t in traces], self.pins, safety, arrived)
+        return band, traces, {r.job_id: r for r in rows}
+
+    def unpin(self, job_id: str, actor: str, event: str) -> None:
+        """Remove a pin, if there is one, and record why in the pin history and the audit trail."""
+        if self.pins.pop(job_id, None) is None:
+            return
+        community = next(h["community"] for h in reversed(self.pin_history) if h["job_id"] == job_id)
+        self.pin_history.append({"event": event, "job_id": job_id, "community": community, "by": actor, "at": _now().isoformat()})
+        self.log(job_id, actor, "Unpinned", "" if event == "unpinned" else event.replace("-", " "))
 
 
 _lock = threading.Lock()
@@ -410,7 +438,120 @@ def recommend_tradies(w: Workspace, job: EnrichedJob, choice: Optional[str] = No
     return rows
 
 
-def job_summary(w: Workspace, job: EnrichedJob, trace: Optional[ReasoningTrace] = None) -> dict:
+# ---- Plain wording (display only: each sentence restates one value the trace already holds) ----
+
+REPAIR_TYPE = {"dangerous": "Emergency", "standard": "General"}
+# Keyed by evaluation's own reason constants, so a new reason raises instead of showing words
+# nobody wrote. Each says what the report mentions, never what exists.
+LOSS_SENTENCES = {
+    NO_ALTERNATIVE: "The report doesn't mention a working alternative, so it's treated as a full loss of use.",
+    ALTERNATIVE: "The report mentions a working alternative, so it isn't treated as a full loss of use.",
+    SIGN: "The report describes a sign of the fault rather than the fault itself, so it isn't treated as a full loss of use.",
+    DEGRADED: "This kind of fault leaves it still working, so it isn't treated as a full loss of use.",
+}
+SAFETY_SENTENCES = {2: "The report describes a safety risk now.", 1: "The report describes a possible safety risk.",
+                    0: "No safety risk described."}
+SAFETY_PLAIN = {2: "Safety risk now", 1: "Possible safety risk", 0: "No safety risk described"}
+NOT_LISTED = "This fault isn't on the NT repair lists. A coordinator needs to choose how to treat it."
+FLAG_PLAIN = {NO_TIER_FLAG: "Not on the NT repair lists: a coordinator needs to choose its repair type"}
+
+
+# evaluation.lookup_tier's several-matches flag; same fact, the repair type named in plain words.
+_HIGHEST_TIER = re.compile(r"Scored at the highest tier among them \((dangerous|standard)\)\.")
+
+
+def plain_flag(flag: str) -> str:
+    """A pipeline flag in the screen's vocabulary. The fact it states is unchanged."""
+    flag = FLAG_PLAIN.get(flag, flag)
+    return _HIGHEST_TIER.sub(lambda m: f"Treated as the higher repair type among them ({REPAIR_TYPE[m.group(1)]}).", flag)
+
+
+def source_sentence(tier: str, source: str) -> str:
+    """One authority behind a listed fault, in words. Only the Act is called law (nt.gov.au is guidance)."""
+    if source.startswith("RTA "):
+        return f"Emergency repair under NT law (Residential Tenancies Act {source.removeprefix('RTA ')})."
+    if source in SOURCE_LABELS:
+        return f"{REPAIR_TYPE[tier]} repair in {SOURCE_LABELS[source]}."
+    raise ValueError(f"no wording for source {source!r}")
+
+
+def is_date_only(report: Optional[Report]) -> bool:
+    """True when the report gave a date but no time (a GEHSF03 "previously reported to DIPL" date)."""
+    # geh_form's own timestamp_source wording; midnight there is a placeholder, not a reported time.
+    return bool(report and report.timestamp_source and report.timestamp_source.startswith("date previously reported to DIPL"))
+
+
+def reported_when(when: datetime, date_only: bool) -> str:
+    """"22 Sep, 9:15", or "22 Sep" alone when no time was reported: never a time nobody gave."""
+    t = when.astimezone(NT_TIME)
+    return f"{t.day} {t:%b}" if date_only else f"{t.day} {t:%b}, {t.hour}:{t:%M}"
+
+
+def reported_sentence(when: datetime, date_only: bool) -> str:
+    return f"Reported {reported_when(when, date_only)} — when everything above is equal, the earlier report goes first."
+
+
+def waiting_sentence(job: EnrichedJob, date_only: bool) -> str:
+    # Master §4.6: waiting time is what shows a remote job stuck awaiting a decision.
+    days = days_waiting(job)
+    return f"Reported {reported_when(job.original_report_timestamp, date_only)} — waiting {days} day{'' if days == 1 else 's'}"
+
+
+def why_here(job: EnrichedJob, trace: Optional[ReasoningTrace], row: Optional[DisplayRow],
+             call: Optional[TierCall], date_only: bool) -> list[str]:
+    """The "Why it's here" box: a headline, then one fixed sentence per value in the trace.
+    A job that needs a decision has no trace, so it gets only what its own record says."""
+    if trace is None:
+        return [NOT_LISTED, SAFETY_SENTENCES[to_rank_input(job).safety_level], waiting_sentence(job, date_only)]
+    lines = [f"#{row.display_position if row else trace.position} in the queue."]
+    if row and row.pin:
+        moved = ("Moved up from" if row.display_position < trace.position
+                 else "Moved down from" if row.display_position > trace.position else "Held at")
+        lines.append(f"{moved} #{trace.position} by a coordinator (reason: {row.pin.reason_tag}).")
+    if call:
+        # The coordinator's call, not the lists: an air conditioner treated like a stove is not
+        # an emergency repair under the Act, so no source sentence is shown for it.
+        lines.append(f"Treated like: {call.fault_name} ({REPAIR_TYPE[trace.tier]}) — coordinator's call: "
+                     f"{call.reason.rstrip('.')}.")
+    elif trace.tier is None:
+        lines.append(NOT_LISTED)
+    else:
+        lines += [source_sentence(trace.tier, src) for src in TIER_TABLE[trace.tier_entry].sources]
+    lines += [LOSS_SENTENCES[reason] for reason in trace.tally_reasons]
+    lines.append(SAFETY_SENTENCES[trace.safety_level])
+    lines.append(reported_sentence(trace.original_timestamp, date_only))
+    return lines
+
+
+def row_reason(job: EnrichedJob, trace: Optional[ReasoningTrace], call: Optional[TierCall]) -> Optional[str]:
+    """The one-line reason under a queue row (master §5.1: explanation visible by default).
+    Each is a short form of a line in the job's own "Why it's here" box, never a new claim."""
+    if job.in_review_band:
+        return "Needs a decision"
+    if trace is None:  # completed: no longer in the queue
+        return None
+    if trace.safety_level:  # safety outranks everything else, so it is the reason when present
+        return SAFETY_PLAIN[trace.safety_level]
+    if call:
+        return f"Treated like: {call.fault_name} ({REPAIR_TYPE[trace.tier]})"
+    if any(src.startswith("RTA ") for src in TIER_TABLE[trace.tier_entry].sources):
+        return "Emergency repair under NT law"
+    return f"{REPAIR_TYPE[trace.tier]} repair (NT Government guidance)"
+
+
+def plain_decided_by(text: str) -> str:
+    """ranking's own reason, with its two tier words in plain language (the rule is unchanged)."""
+    return (text.replace("untiered safety job above, needs a human tier call first",
+                         "safety job above that is not on the repair lists and needs a coordinator decision first")
+                .replace("both untiered", "both not on the repair lists"))
+
+
+def pin_view(pin: Pin) -> dict:
+    return {**pin.model_dump(mode="json"), "age_days": max(0, (_now() - pin.at).days)}
+
+
+def job_summary(w: Workspace, job: EnrichedJob, trace: Optional[ReasoningTrace] = None,
+                row: Optional[DisplayRow] = None) -> dict:
     report = w.repo.get(job.parent_report_id)
     level = to_rank_input(job).safety_level
     verified_fault = next((s.text for s in job.spans if s.verified and s.field == "fault_description"), None)
@@ -431,12 +572,19 @@ def job_summary(w: Workspace, job: EnrichedJob, trace: Optional[ReasoningTrace] 
         "urgency_tally": job.urgency_tally,
         "safety_level": level,
         "safety_name": SAFETY_NAMES[level],
-        "flags": list(job.flags) + (list(trace.flags[len(job.flags):]) if trace else []),
+        "flags": [plain_flag(f) for f in list(job.flags) + (list(trace.flags[len(job.flags):]) if trace else [])],
         "original_timestamp": job.original_report_timestamp.isoformat(),
+        "date_only": is_date_only(report),
         "days_waiting": days_waiting(job),
         "distance": distance_of(job),
-        "position": trace.position if trace else None,
-        "decided_by": trace.decided_by if trace else None,
+        # row: the coordinator's view with pins; without one, the system position.
+        "position": row.display_position if row else trace.position if trace else None,
+        "system_position": trace.position if trace else None,
+        "pinned": bool(row and row.pinned),
+        "pin": pin_view(row.pin) if row and row.pin else None,
+        "arrived_above_pin": bool(row and row.arrived_above_pin),
+        "decided_by": "coordinator pin" if row and row.pinned else trace.decided_by if trace else None,
+        "reason": row_reason(job, trace, w.tier_calls.get(job.request_id)),
         "in_review_band": job.in_review_band,
         "needed_trades": list(job.required_trades),
         "tier_call": w.tier_calls[job.request_id].model_dump(mode="json") if job.request_id in w.tier_calls else None,
@@ -445,29 +593,44 @@ def job_summary(w: Workspace, job: EnrichedJob, trace: Optional[ReasoningTrace] 
     }
 
 
-def trace_rows(trace: ReasoningTrace) -> list[dict]:
+def move_range(traces: list[ReasoningTrace], job_id: str) -> Optional[dict]:
+    """The first and last slot a pin may use for this job: its own safety group (master §3.4)."""
+    if job_id not in {t.job_id for t in traces}:
+        return None
+    k = sum(t.safety_level >= 1 for t in traces)
+    safety = next(t.safety_level for t in traces if t.job_id == job_id) >= 1
+    return {"top": 1, "last": k} if safety else {"top": k + 1, "last": len(traces)}
+
+
+def trace_rows(trace: ReasoningTrace, row: Optional[DisplayRow], call: Optional[TierCall], date_only: bool) -> list[dict]:
     rows: list[dict] = []
+    if call:
+        rows.append({"label": "Treated like",
+                     "value": f"{call.fault_name} ({REPAIR_TYPE[trace.tier]}) — coordinator's call: {call.reason}",
+                     "note": f"{call.by}, {call.at.astimezone(NT_TIME):%d %b %Y}"})
     if trace.tier is None:
-        rows.append({"label": "Tier", "value": "untiered", "note": "needs a coordinator tier call"})
+        rows.append({"label": "Repair type", "value": "Not on the repair lists", "note": "Choose repair type"})
     else:
         sources = "; ".join(_source_label(s) for s in TIER_TABLE[trace.tier_entry].sources)
         rows += [
-            {"label": "Fault list match", "value": trace.tier_entry, "note": "reference list name"},
-            {"label": "Tier", "value": trace.tier, "note": sources},
-            {"label": "Base points", "value": str(trace.base_points), "note": "from the tier, not the text"},
+            {"label": "Repair list match", "value": trace.tier_entry, "note": "name on the NT repair lists"},
+            {"label": "Repair type", "value": REPAIR_TYPE[trace.tier], "note": sources},
+            {"label": "Base points", "value": str(trace.base_points), "note": "from the repair type, not the text"},
             {"label": "Severity bump", "value": f"+{trace.severity_bump}", "note": "; ".join(trace.tally_reasons)},
             {"label": "Urgency score", "value": str(trace.urgency_tally), "note": f"{trace.base_points} + {trace.severity_bump}"},
         ]
     rows += [
-        {"label": "Safety level", "value": f"{trace.safety_level} ({SAFETY_NAMES[trace.safety_level]})", "note": trace.safety_reason},
-        {"label": "Required trade", "value": ", ".join(trace.required_trades) or "not confirmed", "note": "Stage 5, display only"},
+        {"label": "Safety", "value": f"{SAFETY_PLAIN[trace.safety_level]} (level {trace.safety_level})", "note": trace.safety_reason},
+        {"label": "Required trade", "value": ", ".join(trace.required_trades) or "not confirmed", "note": "Shown for planning — never changes the order"},
         {"label": "Distance", "value": f"{trace.distance_km:g} km" if trace.distance_km is not None else "unknown",
          "note": f"straight line to {trace.nearest_office}, not in sort key" if trace.nearest_office else "community not in the table, not in sort key"},
-        *([{"label": "Second reader", "value": trace.second_reader.status,
+        *([{"label": "Second check (independent reader)", "value": trace.second_reader.status,
             "note": "; ".join(trace.second_reader.flags) or "no disagreement"}] if trace.second_reader else []),
-        *([{"label": "Re-read", "value": "yes", "note": "safety re-read after a second-reader flag"}] if trace.reread else []),
-        {"label": "Reported", "value": f"{trace.original_timestamp.astimezone(NT_TIME):%d %b %Y, %H:%M}", "note": "first-come order input, never overwritten"},
-        {"label": "Position", "value": f"{trace.position} of {trace.queue_length}", "note": trace.decided_by},
+        *([{"label": "Second check (safety re-read)", "value": "yes", "note": "read again after the independent reader disagreed on safety"}] if trace.reread else []),
+        {"label": "Reported", "value": f"{trace.original_timestamp.astimezone(NT_TIME):%d %b %Y}" + ("" if date_only else f", {trace.original_timestamp.astimezone(NT_TIME):%H:%M}"), "note": "When everything above is equal, the earlier report goes first. Never overwritten."},
+        {"label": "Queue place", "value": f"{trace.position} of {trace.queue_length}", "note": plain_decided_by(trace.decided_by)},
+        *([{"label": "Coordinator pin", "value": f"{row.display_position} of {trace.queue_length}",
+            "note": f"coordinator pin ({row.pin.reason_tag}); system position {trace.position}"}] if row and row.pin else []),
     ]
     return rows
 
@@ -506,17 +669,17 @@ PRIVACY_NOTE = {
 def stage_view(w: Workspace, report_id: str) -> dict:
     """What each stage produced for one report, ending with its Stage 6 result."""
     report, result = w.repo.get(report_id), w.results[report_id]
-    band, traces = w.ranking()
+    band, traces, rows = w.display()
     by_id = {t.job_id: t for t in traces}
     jobs = [j for j in w.jobs.values() if j.parent_report_id == report_id]
     out_jobs = []
     for job in jobs:
-        trace = by_id.get(job.request_id)
-        sms, why = tenant_sms(job), tenant_why(job)
+        trace, row = by_id.get(job.request_id), rows.get(job.request_id)
+        sms, why = tenant_sms(job), tenant_why(job, pinned=bool(row and row.pinned))
         tier_sources = "; ".join(_source_label(s) for s in TIER_TABLE[job.tier_entry].sources) if job.tier_entry else None
         top = next((r for r in recommend_tradies(w, job) if r["recommended"]), None)
         out_jobs.append({
-            **job_summary(w, job, trace),
+            **job_summary(w, job, trace, row),
             "stage3": [s.model_dump() for s in job.spans],
             "stage4": {"tier": job.tier, "tier_entry": job.tier_entry, "tier_sources": tier_sources,
                        "base_points": job.base_points, "severity_bump": job.severity_bump,
@@ -524,17 +687,19 @@ def stage_view(w: Workspace, report_id: str) -> dict:
                        "safety_level": to_rank_input(job).safety_level, "safety_reason": job.safety_reason},
             "stage5": {"required_trades": job.required_trades, "distance": distance_of(job),
                        "recommended_tradie": top["name"] if top else None},  # None until the trade is known
-            "stage6": {"in_review_band": job.request_id in band, "position": trace.position if trace else None,
+            "stage6": {"in_review_band": job.request_id in band, "position": row.display_position if row else None,
                        "queue_length": trace.queue_length if trace else None,
-                       "decided_by": trace.decided_by if trace else "Held in the review band until a coordinator tier call",
-                       "trace": trace_rows(trace) if trace else None, "sms": sms, "why": why},
+                       "decided_by": plain_decided_by(trace.decided_by) if trace else "Needs a decision: choose repair type",
+                       "trace": trace_rows(trace, row, w.tier_calls.get(job.request_id), is_date_only(report)) if trace else None,
+                       "why_here": why_here(job, trace, row, w.tier_calls.get(job.request_id), is_date_only(report)),
+                       "sms": sms, "why": why},
         })
     return {
         "report_id": report_id,
         "stage1": {"request_id": report.request_id, "tenant_id": report.tenant_id, "source_tag": report.source_tag.value,
                    "community": report.community, "region": report.region,
                    "original_report_timestamp": report.original_report_timestamp.isoformat(),
-                   "timestamp_source": report.timestamp_source, "source_file": report.source_file,
+                   "date_only": is_date_only(report), "timestamp_source": report.timestamp_source, "source_file": report.source_file,
                    "source_item": report.source_item, "raw_text": report.raw_text,
                    "privacy": PRIVACY_NOTE["form" if report.source_item is not None else "text"]},
         "stage2": {"status": result.status.value, "extractor": result.extractor, "attempts": result.attempts,
@@ -611,7 +776,9 @@ async def reference(request: Request) -> dict:
         w = ws()
         communities = sorted(set(community_names()) | {j.community for j in w.jobs.values()})
         return {"communities": communities, "fault_names": list(FAULT_NAMES), "mode": w.client.describe(),
-                "trades": list(ALL_TRADES)}
+                "trades": list(ALL_TRADES), "reason_tags": list(REASON_TAGS),
+                "repair_list": [{"name": e.name, "repair_type": REPAIR_TYPE[e.tier],
+                                 "sources": [_source_label(s) for s in e.sources]} for e in TIER_TABLE.values()]}
 
 
 @app.get("/api/queue")
@@ -619,7 +786,8 @@ async def queue(request: Request) -> dict:
     require(request, "admin")
     with _lock:
         w = ws()
-        band, traces = w.ranking()
+        band, traces, rows = w.display()
+        by_id = {t.job_id: t for t in traces}
         needs_human = []
         for rid, res in w.results.items():
             if res.status is ExtractionStatus.OK:
@@ -633,7 +801,10 @@ async def queue(request: Request) -> dict:
         jobs = w.open_jobs()
         return {
             "mode": w.client.describe(),
-            "ranked": [job_summary(w, jobs[t.job_id], t) for t in traces],
+            # Display order: pins over the system order; each row carries both positions.
+            "ranked": [job_summary(w, jobs[r.job_id], by_id[r.job_id], r)
+                       for r in sorted(rows.values(), key=lambda r: r.display_position)],
+            "pin_count": sum(r.pinned for r in rows.values()),
             "review_band": [job_summary(w, jobs[j]) for j in band],
             "needs_human": needs_human,
             "completed": [job_summary(w, j) for k, j in w.jobs.items() if w.status[k]["status"] == "Completed"],
@@ -652,23 +823,24 @@ async def job_detail(job_id: str, request: Request, trade: Optional[str] = None)
         if job is None:
             raise HTTPException(404, "No job with that id")
         needed, trade_source = trades_needed(w, job, trade)
-        band, traces = w.ranking()
-        trace = next((t for t in traces if t.job_id == job_id), None)
+        band, traces, rows = w.display()
+        trace, row = next((t for t in traces if t.job_id == job_id), None), rows.get(job_id)
         report = w.repo.get(job.parent_report_id)
         result = w.results[job.parent_report_id]
         same_community = [j for k, j in w.open_jobs().items() if j.community == job.community]
         others = [j.request_id for j in same_community if j.request_id != job_id]
         oldest = max((days_waiting(j) for j in same_community), default=0)
-        sms, why = tenant_sms(job), tenant_why(job)
+        sms, why = tenant_sms(job), tenant_why(job, pinned=bool(row and row.pinned))
         return {
-            **job_summary(w, job, trace),
+            **job_summary(w, job, trace, row),
             "raw_text": report.raw_text,
             "timestamp_source": report.timestamp_source,
             "extractor": result.extractor,
             "facts": facts_view(w.facts[job_id]),
             "spans": [s.model_dump() for s in job.spans],
-            "trace": trace_rows(trace) if trace else None,
-            "review_reason": "Not on the fault list and no safety risk described: waiting for a coordinator tier call." if job.in_review_band else None,
+            "trace": trace_rows(trace, row, w.tier_calls.get(job_id), is_date_only(report)) if trace else None,
+            "why_here": why_here(job, trace, row, w.tier_calls.get(job_id), is_date_only(report)),
+            "review_reason": NOT_LISTED if job.in_review_band else None,
             "sms": sms,
             "why": why,
             "logistics": {
@@ -679,6 +851,7 @@ async def job_detail(job_id: str, request: Request, trade: Optional[str] = None)
                 "community_line": f"{job.community}: {len(same_community)} open job(s), oldest waiting {oldest} day(s)",
             },
             "recommendations": recommend_tradies(w, job, trade),
+            "move_range": move_range(traces, job_id),
             "audit": [a for a in w.audit if a["job_id"] in (job_id, job.parent_report_id)][::-1],
         }
 
@@ -765,7 +938,7 @@ class FollowupIn(BaseModel):
 @app.post("/api/jobs/{job_id}/followup")
 async def followup(job_id: str, data: FollowupIn, request: Request) -> dict:
     """Escalation: matched by exact id, the report is re-read, the original timestamp is kept."""
-    require(request, "admin")
+    user = require(request, "admin")
     with _lock:
         w = ws()
         job = w.jobs.get(job_id)
@@ -791,9 +964,30 @@ async def followup(job_id: str, data: FollowupIn, request: Request) -> dict:
             w.extra_flags.setdefault(job_id, []).append(
                 f'Follow-up could not be read automatically, review it: "{data.text.strip()}"')
             w.store_job(enrich_fault(report, w.facts[job_id], job_id), w.facts[job_id])
+        # A re-read that splits one fault into several makes new job ids; the old job's pin goes with it.
+        for pinned_id in [k for k in w.pins if k not in w.jobs]:
+            w.unpin(pinned_id, user["name"], "replaced-by-reread")
         w.log(job_id, "tenant", "Follow-up received", f'"{data.text.strip()}" (read by {result.extractor}, {result.status.value})')
         w.save()
         return {"ok": True, "status": result.status.value, "extractor": result.extractor}
+
+
+@app.get("/api/tier-calls")
+async def previous_tier_calls(request: Request) -> list[dict]:
+    """Every coordinator repair-type call so far, newest first. Read-only reference: nothing
+    here is ever pre-selected, suggested or applied to another job."""
+    require(request, "admin")
+    with _lock:
+        w = ws()
+        rows = []
+        for job_id, call in sorted(w.tier_calls.items(), key=lambda kv: kv[1].at, reverse=True):
+            job = w.jobs.get(job_id)
+            fault = (next((s.text for s in job.spans if s.verified and s.field == "fault_description"), None)
+                     or job.fault_description) if job else None
+            rows.append({"job_id": job_id, "fault": fault, "job_open": job is not None, "treated_like": call.fault_name,
+                         "repair_type": REPAIR_TYPE[TIER_TABLE[call.fault_name].tier], "by": call.by,
+                         "reason": call.reason, "at": call.at.isoformat()})
+        return rows
 
 
 class TierCallIn(BaseModel):
@@ -811,12 +1005,66 @@ async def tier_call(job_id: str, data: TierCallIn, request: Request) -> dict:
         if job is None:
             raise HTTPException(404, "No job with that id")
         if job.urgency_tally is not None:
-            raise HTTPException(400, "This job already has a tier from the fault list")
+            raise HTTPException(400, "This job already has a repair type from the NT repair lists")
         if data.fault_name not in TIER_TABLE:
             raise HTTPException(400, "Choose a fault from the list")
         w.tier_calls[job_id] = TierCall(fault_name=data.fault_name, reason=data.reason.strip(), by=user["name"], at=_now())
         w.store_job(job, w.facts[job_id])
         w.log(job_id, user["name"], "Tier call", f'Counted as "{data.fault_name}" ({TIER_TABLE[data.fault_name].tier}). Reason: {data.reason.strip()}')
+        w.save()
+        return {"ok": True}
+
+
+class PinIn(BaseModel):
+    # Plain int and str, checked below, so a bad value gets a 400 with a reason, not a 422.
+    model_config = ConfigDict(extra="forbid")  # a note is refused: tags only (master §5.1)
+    target_position: int
+    reason_tag: str
+
+
+@app.post("/api/jobs/{job_id}/pin")
+async def pin_job(job_id: str, data: PinIn, request: Request) -> dict:
+    """The coordinator's override: show this job at a chosen position. Display only, never ranking."""
+    user = require(request, "admin")
+    with _lock:
+        w = ws()
+        job = w.jobs.get(job_id)
+        if job is None:
+            raise HTTPException(404, "No job with that id")
+        if data.target_position < 1:
+            raise HTTPException(400, "Position must be 1 or more")
+        if data.reason_tag not in REASON_TAGS:
+            raise HTTPException(400, "Choose a reason: " + ", ".join(REASON_TAGS))
+        band, traces = w.ranking()
+        if job_id in band:
+            raise HTTPException(400, "Choose repair type first")
+        if w.status[job_id]["status"] != "Open":
+            raise HTTPException(400, "Only an open job that has not been dispatched can be pinned")
+        system = [t.job_id for t in traces]
+        if pin_breaks_safety(system, {t.job_id: t.safety_level for t in traces}, job_id, data.target_position):
+            raise HTTPException(400, SAFETY_BLOCK)
+        at, system_position = _now(), system.index(job_id) + 1
+        w.pins[job_id] = Pin.model_validate({"job_id": job_id, "target_position": data.target_position,
+                                             "reason_tag": data.reason_tag, "by": user["name"], "at": at,
+                                             "system_position_at_pin": system_position})
+        direction = "up" if data.target_position < system_position else "down" if data.target_position > system_position else "same"
+        w.pin_history.append({"event": "pinned", "job_id": job_id, "community": job.community, "by": user["name"],
+                              "at": at.isoformat(), "tag": data.reason_tag, "target": data.target_position,
+                              "system_position": system_position, "direction": direction})
+        w.log(job_id, user["name"], f"Pinned #{data.target_position} (system #{system_position})", data.reason_tag)
+        w.save()
+        return {"ok": True}
+
+
+@app.delete("/api/jobs/{job_id}/pin")
+async def unpin_job(job_id: str, request: Request) -> dict:
+    """Remove the coordinator's pin; the job goes back to its system position."""
+    user = require(request, "admin")
+    with _lock:
+        w = ws()
+        if job_id not in w.pins:
+            raise HTTPException(404, "This job is not pinned")
+        w.unpin(job_id, user["name"], "unpinned")
         w.save()
         return {"ok": True}
 
@@ -845,6 +1093,7 @@ async def assign(job_id: str, data: AssignIn, request: Request) -> dict:
         mismatch = needed and not set(needed) & set(tradie["trades"])
         chosen = needed[0] if source == "coordinator" else None
         w.status[job_id] = {"status": "Assigned", "tradie_id": tradie["id"], "note": data.note.strip(), "trade": chosen}
+        w.unpin(job_id, user["name"], "cleared-by-assign")  # master §5.1: a pin lasts until dispatch
         w.log(job_id, user["name"], "Tradie assigned",
               f"{tradie['name']} ({', '.join(tradie['trades'])}, {tradie['base']})"
               + (f" as {chosen} (coordinator's trade call: not on the fault list)" if chosen else "")
@@ -869,6 +1118,8 @@ async def decision(job_id: str, data: DecisionIn, request: Request) -> dict:
         tradie_id = w.status[job_id]["tradie_id"] if data.status == "Completed" else None
         w.status[job_id] = {"status": data.status, "tradie_id": tradie_id, "note": data.note.strip(),
                             "trade": w.status[job_id].get("trade")}
+        if data.status == "Completed":
+            w.unpin(job_id, user["name"], "cleared-by-completion")
         w.log(job_id, user["name"], "Job completed" if data.status == "Completed" else "Job reopened", data.note.strip())
         w.save()
         return {"ok": True}
@@ -947,7 +1198,24 @@ async def fairness(request: Request) -> dict:
         rows = [{**job_summary(w, jobs[t.job_id], t), "nearest_first_position": what_if[t.job_id],
                  "change": what_if[t.job_id] - t.position} for t in traces]
         losers = [r for r in rows if r["change"] > 0]
+        # Display only, from the append-only history, so pins already cleared still count. One row
+        # per pinned job, read from its latest pin; moving the same job again is a re-pin.
+        latest: dict[str, dict] = {}
+        repins: dict[str, int] = {}
+        for h in (h for h in w.pin_history if h["event"] == "pinned"):
+            if h["job_id"] in latest:
+                repins[h["community"]] = repins.get(h["community"], 0) + 1
+            latest[h["job_id"]] = h
+        overrides: dict[str, dict] = {}
+        for h in latest.values():
+            o = overrides.setdefault(h["community"], {"community": h["community"], "jobs": 0, "repins": repins.get(h["community"], 0),
+                                                       "up": 0, "down": 0, "by_tag": dict.fromkeys(REASON_TAGS, 0)})
+            o["jobs"] += 1
+            o["by_tag"][h["tag"]] += 1
+            if h["direction"] != "same":
+                o[h["direction"]] += 1
         return {
+            "overrides": sorted(overrides.values(), key=lambda o: (-o["jobs"], o["community"])),
             "communities": sorted(communities.values(), key=lambda c: -c["oldest_days"]),
             "what_if": rows,
             "summary": {
