@@ -1,6 +1,6 @@
 {
-  "model": "gpt-4o",
-  "recorded_at": "2026-10-06",
-  "prompt_hash": "d619bcdcd149f269f087c3b0ec02178d8f825135b6f4ea60fe180bebd36069de",
-  "response": "{\"faults\":[{\"fault_description\":\"toilet blocked\",\"taxonomy_match\":[\"blocked or broken toilet\"],\"alternative_mentioned\":true,\"coping_mentioned\":false,\"impact_status\":\"ongoing\",\"hazard_status\":\"none\",\"mechanism_type\":null,\"harm_claimed\":false,\"fault_or_sign\":\"fault\",\"claim_mismatch\":null,\"worsening_mentioned\":false,\"quoted_spans\":[{\"field\":\"fault_description\",\"text\":\"toilet blocked\"},{\"field\":\"taxonomy_match\",\"text\":\"toilet blocked\"},{\"field\":\"alternative_mentioned\",\"text\":\"using the other one\"},{\"field\":\"impact_status\",\"text\":\"ongoing\"}]}]}"
+  "model": "anthropic/claude-sonnet-5.5",
+  "recorded_at": "2026-10-07",
+  "prompt_hash": "cd97a6c114f159751330e869e9d0a069c9aad125d7bdad79936a94708529bfa7",
+  "response": "{\"faults\":[{\"fault_description\":\"toilet blocked\",\"taxonomy_match\":[\"blocked or broken toilet\"],\"alternative_mentioned\":true,\"coping_mentioned\":false,\"impact_status\":\"ongoing\",\"hazard_status\":\"none\",\"mechanism_type\":null,\"harm_claimed\":false,\"fault_or_sign\":\"fault\",\"claim_mismatch\":null,\"worsening_mentioned\":false,\"quoted_spans\":[{\"field\":\"fault_description\",\"text\":\"toilet blocked\"},{\"field\":\"taxonomy_match\",\"text\":\"toilet blocked\"},{\"field\":\"alternative_mentioned\",\"text\":\"using the other one\"}]}]}"
 }

@@ -1,0 +1,6 @@
+{
+  "model": "anthropic/claude-sonnet-5.5",
+  "recorded_at": "2026-10-07",
+  "prompt_hash": "cd97a6c114f159751330e869e9d0a069c9aad125d7bdad79936a94708529bfa7",
+  "response": "{\"faults\":[{\"fault_description\":\"Roof leaking during storms, water stain spreading and ceiling sheet sagging\",\"taxonomy_match\":[\"roof leak\"],\"alternative_mentioned\":false,\"coping_mentioned\":false,\"impact_status\":\"intermittent\",\"hazard_status\":\"unclear\",\"mechanism_type\":null,\"harm_claimed\":false,\"fault_or_sign\":\"fault\",\"claim_mismatch\":null,\"worsening_mentioned\":true,\"quoted_spans\":[{\"field\":\"fault_description\",\"text\":\"Roof leaking during storms, water stain spreading and ceiling sheet sagging\"},{\"field\":\"taxonomy_match\",\"text\":\"Roof leaking during storms\"},{\"field\":\"impact_status\",\"text\":\"Roof leaking during storms\"},{\"field\":\"hazard\",\"text\":\"ceiling sheet sagging\"},{\"field\":\"worsening_mentioned\",\"text\":\"damage is getting worse\"}]}]}"
+}

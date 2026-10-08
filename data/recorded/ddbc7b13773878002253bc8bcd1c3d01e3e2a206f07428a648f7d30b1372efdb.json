@@ -1,0 +1,6 @@
+{
+  "model": "anthropic/claude-sonnet-5.5",
+  "recorded_at": "2026-10-07",
+  "prompt_hash": "cd97a6c114f159751330e869e9d0a069c9aad125d7bdad79936a94708529bfa7",
+  "response": "{\"faults\":[{\"fault_description\":\"Stove, rangehood and splashback burnt and melted, cannot cook\",\"taxonomy_match\":[\"storm, fire or impact damage\",\"stove or oven not working\"],\"alternative_mentioned\":false,\"coping_mentioned\":false,\"impact_status\":\"ongoing\",\"hazard_status\":\"none\",\"mechanism_type\":null,\"harm_claimed\":false,\"fault_or_sign\":\"fault\",\"claim_mismatch\":null,\"worsening_mentioned\":false,\"quoted_spans\":[{\"field\":\"fault_description\",\"text\":\"Stove, rangehood and splashback burnt and melted, cannot cook\"},{\"field\":\"taxonomy_match\",\"text\":\"Stove, rangehood and splashback burnt and melted\"},{\"field\":\"taxonomy_match\",\"text\":\"cannot cook\"}]}]}"
+}

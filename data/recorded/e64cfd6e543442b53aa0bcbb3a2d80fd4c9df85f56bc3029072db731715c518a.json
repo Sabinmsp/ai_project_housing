@@ -1,0 +1,6 @@
+{
+  "model": "anthropic/claude-sonnet-5.5",
+  "recorded_at": "2026-10-07",
+  "prompt_hash": "cd97a6c114f159751330e869e9d0a069c9aad125d7bdad79936a94708529bfa7",
+  "response": "{\"faults\":[{\"fault_description\":\"Hot water system not heating\",\"taxonomy_match\":[\"hot water system not working\"],\"alternative_mentioned\":false,\"coping_mentioned\":false,\"impact_status\":\"ongoing\",\"hazard_status\":\"none\",\"mechanism_type\":null,\"harm_claimed\":false,\"fault_or_sign\":\"fault\",\"claim_mismatch\":null,\"worsening_mentioned\":false,\"quoted_spans\":[{\"field\":\"fault_description\",\"text\":\"Hot water system not heating\"},{\"field\":\"taxonomy_match\",\"text\":\"Hot water system not heating\"}]}]}"
+}
