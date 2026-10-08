@@ -275,6 +275,8 @@ _WHY_STATUS: dict[SmsPath, str] = {
 }
 # Same lines for every job: no fault-specific guessing about impact, no timeframe.
 WHY_IMPACT_LINE = "We know this is hard to live with. A coordinator can see how long it has been waiting."
+# Master §5.1: the tenant learns a person moved it, never the tag, a position or another job.
+WHY_PINNED_LINE = "A coordinator has adjusted when your repair will be handled."
 _NT_TIME = ZoneInfo("Australia/Darwin")
 
 
@@ -290,17 +292,22 @@ def _why_subject(ref: str, fault: str | None) -> str:
     return f'Your "{words}" repair ({ref})' if words else f"Your repair ({ref})"
 
 
-def tenant_why(job: EnrichedJob | ExtractionResult) -> str:
-    """The answer to "WHY <ref>": this job's fault, ref, category word and received date.
+def tenant_why(job: EnrichedJob | ExtractionResult, *, pinned: bool) -> str:
+    """The answer to "WHY <ref>": this job's fault, ref, category word and received date, and
+    one line if a coordinator pinned it.
 
     Raises:
-        ValueError: an OK ExtractionResult, whose answer must come from its EnrichedJob.
+        ValueError: an OK ExtractionResult, whose answer must come from its EnrichedJob, or a
+            pinned ExtractionResult (only a ranked job can be pinned).
     """
+    # pinned has no default: a forgotten argument must fail, not hide a coordinator decision.
     # Invariant 10: reads this job only, so no position, other job, count or decided_by.
     # Never explains how jobs are ranked and never states a timeframe.
     if isinstance(job, ExtractionResult):
         if job.status is ExtractionStatus.OK:
             raise ValueError(f"{job.request_id}: extracted report; build the answer from its EnrichedJob")
+        if pinned:
+            raise ValueError(f"{job.request_id}: not a ranked job, so it cannot be pinned")
         path: SmsPath = "flagged" if job.status is ExtractionStatus.FLAGGED_FOR_HUMAN else "out_of_scope"
         # No job, so no received date to state.
         ref = job.request_id
@@ -310,6 +317,7 @@ def tenant_why(job: EnrichedJob | ExtractionResult) -> str:
     received = job.original_report_timestamp.astimezone(_NT_TIME)
     return " ".join((
         f"{_why_subject(ref, _verified_fault_text(job))} {_WHY_STATUS[path]}",
+        *((WHY_PINNED_LINE,) if pinned else ()),
         f"Yours was received on {received.day} {received:%B %Y}.",
         WHY_IMPACT_LINE,
         _why_help_line(ref),
